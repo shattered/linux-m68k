@@ -159,4 +159,18 @@ struct termios {
 #define	TCSADRAIN	1
 #define	TCSAFLUSH	2
 
+#if 1	/*  extty   */
+#define EXTTY_SET_SIZE	256	/*  all chars...  */
+
+struct extty {
+	unsigned char *base_input_set;
+	unsigned char *alt_input_set;
+	unsigned char *output_set;
+	unsigned char dg_emu_flag;
+	unsigned char dg_emu_020;
+	unsigned char alt_set_flag;
+	unsigned char alt_switch_char;
+};
+#endif
+
 #endif /* __ARCH_M68K_TERMBITS_H__ */

@@ -127,7 +127,7 @@ enum machine_type {
 #define SEGMENT_SIZE PAGE_SIZE
 #endif
 
-#ifdef linux
+#if defined(linux) || defined(__besta__)
 #include <asm/page.h>
 #if defined(__i386__) || defined(__mc68000__)
 #define SEGMENT_SIZE	1024

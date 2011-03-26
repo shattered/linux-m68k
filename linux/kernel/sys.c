@@ -31,7 +31,11 @@
 /*
  * this indicates whether you can reboot with ctrl-alt-del: the default is yes
  */
-int C_A_D = 1;
+#ifdef CONFIG_BESTA
+static int C_A_D = 0;
+#else
+static int C_A_D = 1;
+#endif
 
 extern void adjust_clock(void);
 extern void gdth_halt(void);

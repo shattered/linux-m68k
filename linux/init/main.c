@@ -76,6 +76,9 @@ extern void sock_init(void);
 extern unsigned long pci_init(unsigned long, unsigned long);
 extern void sysctl_init(void);
 
+#ifdef CONFIG_BESTA
+extern void besta_cacr_setup (char *str, int *ints);
+#endif
 extern void no_scroll(char *str, int *ints);
 extern void swap_setup(char *str, int *ints);
 extern void buff_setup(char *str, int *ints);
@@ -237,7 +240,11 @@ int real_root_dev;		/* MUST be int for sysctl! */
 #endif
 #endif
 
+#ifndef CONFIG_BESTA
 int root_mountflags = MS_RDONLY;
+#else
+int root_mountflags = 0;
+#endif
 char *execute_command = 0;
 
 int serial_debug = 0;
@@ -256,7 +263,11 @@ static char * argv_rc[] = { "/bin/sh", NULL };
 static char * envp_rc[] = { "HOME=/", "TERM=linux", NULL };
 
 static char * argv[] = { "-/bin/sh",NULL };
+#ifndef CONFIG_BESTA
 static char * envp[] = { "HOME=/usr/root", "TERM=linux", NULL };
+#else
+static char * envp[] = { "HOME=/", "TERM=linux", NULL };
+#endif
 
 char *get_options(char *str, int *ints)
 {
@@ -308,7 +319,12 @@ struct kernel_param bootsetups[] = {
 	{ "swap=", swap_setup },
 	{ "buff=", buff_setup },
 	{ "panic=", panic_setup },
+#ifndef CONFIG_BESTA
 	{ "no-scroll", no_scroll },
+#endif
+#ifdef CONFIG_BESTA
+	{ "cacr=", besta_cacr_setup },
+#endif
 #ifdef CONFIG_BUGi386
 	{ "no-hlt", no_halt },
 	{ "no387", no_387 },
@@ -620,8 +636,8 @@ void calibrate_delay(void)
 	loops_per_sec *= HZ;
 /* Round the value and print it */	
 	printk("ok - %lu.%02lu BogoMIPS\n",
-		loops_per_sec/500000,
-		(loops_per_sec/5000) % 100);
+		loops_per_sec/250000,
+		(loops_per_sec/2500) % 100);
 
 #if defined(__SMP__) && defined(__i386__)
 	smp_loops_per_tick = loops_per_sec / 400;
@@ -719,6 +735,7 @@ static void parse_root_dev(char * line)
  * This routine also checks for options meant for the kernel.
  * These options are not given to init - they are for internal kernel use only.
  */
+
 static void parse_options(char *line)
 {
 	char *next;
@@ -904,6 +921,12 @@ static void smp_begin(void)
  *	Activate the first processor.
  */
 
+#ifdef CONFIG_BESTA
+extern void config_besta (void);
+extern unsigned long besta_console_init (unsigned long, unsigned long);
+extern void besta_mem_init (unsigned long, unsigned long);
+#endif
+
 asmlinkage void start_kernel(void)
 {
 	char * command_line;
@@ -925,6 +948,9 @@ asmlinkage void start_kernel(void)
  * enable them
  */
 	setup_arch(&command_line, &memory_start, &memory_end);
+#ifdef CONFIG_BESTA
+	config_besta();
+#endif
 	memory_start = paging_init(memory_start,memory_end);
 	trap_init();
 	init_IRQ();
@@ -951,6 +977,9 @@ asmlinkage void start_kernel(void)
 		memset(prof_buffer, 0, prof_len * sizeof(unsigned int));
 	}
 	memory_start = console_init(memory_start,memory_end);
+#ifdef CONFIG_BESTA
+	memory_start = besta_console_init (memory_start, memory_end);
+#endif
 #ifdef CONFIG_PCI
 	memory_start = pci_init(memory_start,memory_end);
 #endif
@@ -967,7 +996,11 @@ asmlinkage void start_kernel(void)
 		initrd_start = 0;
 	}
 #endif
+#ifdef CONFIG_BESTA
+	besta_mem_init (memory_start, memory_end);
+#else
 	mem_init(memory_start,memory_end);
+#endif
 	buffer_init();
 	sock_init();
 #if defined(CONFIG_SYSVIPC) || defined(CONFIG_KERNELD)
@@ -1029,7 +1062,11 @@ static int do_shell(void * shell)
 {
 	close(0);close(1);close(2);
 	setsid();
+#ifndef CONFIG_BESTA
 	(void) open("/dev/tty1",O_RDWR,0);
+#else
+	(void) open("/dev/ttyS0",O_RDWR,0);
+#endif
 	(void) dup(0);
 	(void) dup(0);
 	return execve(shell, argv, envp);
@@ -1042,7 +1079,11 @@ static int do_linuxrc(void * shell)
 
 	close(0);close(1);close(2);
 	setsid();
+#ifndef CONFIG_BESTA
 	(void) open("/dev/tty1",O_RDWR,0);
+#else
+	(void) open("/dev/ttyS0",O_RDWR,0);
+#endif
 	(void) dup(0);
 	(void) dup(0);
 	return execve(shell, argv, envp_init);
@@ -1116,16 +1157,11 @@ static int init(void * unused)
 	}
 #endif
 	
-	/*
-	 *	This keeps serial console MUCH cleaner, but does assume
-	 *	the console driver checks there really is a video device
-	 *	attached (Sparc effectively does).
-	 */
-
-	if ((open("/dev/tty1",O_RDWR,0) < 0) &&
-	    (open("/dev/ttyS0",O_RDWR,0) < 0))
-		printk("Unable to open an initial console.\n");
-			
+#ifndef CONFIG_BESTA
+	(void) open("/dev/tty1",O_RDWR,0);
+#else
+	(void) open("/dev/ttyS0",O_RDWR,0);
+#endif
 	(void) dup(0);
 	(void) dup(0);
 

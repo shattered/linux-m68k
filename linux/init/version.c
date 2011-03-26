@@ -27,4 +27,10 @@ struct new_utsname system_utsname = {
 
 const char *linux_banner = 
 	"Linux version " UTS_RELEASE " (" LINUX_COMPILE_BY "@"
-	LINUX_COMPILE_HOST ") (" LINUX_COMPILER ") " UTS_VERSION "\n";
+	LINUX_COMPILE_HOST ") (" LINUX_COMPILER ") " UTS_VERSION "\n"
+#ifndef CONFIG_BESTA
+	;
+#else
+	"\n                        Ported by   Dmitry K. Butskoy, 1996,"
+	"\n                                    buc@citadel.stu.neva.ru\n\n";
+#endif

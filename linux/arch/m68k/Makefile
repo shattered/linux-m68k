@@ -25,10 +25,12 @@ ifneq ($(COMPILE_ARCH),$(ARCH))
 	CROSS_COMPILE = m68k-linux-
 endif
 else
+ifndef CONFIG_BESTA
 LD += -m m68klinux
 ifneq ($(COMPILE_ARCH),$(ARCH))
 	# prefix for cross-compiling binaries
 	CROSS_COMPILE = m68k-linuxaout-
+endif
 endif
 endif
 
@@ -42,10 +44,14 @@ endif
 # -qmagic (we need to remove the 32 byte header for bootup purposes)
 #
 
+ifdef CONFIG_BESTA
+LINKFLAGS = -T specs.ld
+else
 ifdef CONFIG_KERNEL_ELF
 LINKFLAGS = -Ttext 0x1000
 else
 LINKFLAGS = -qmagic -Ttext 0xFE0
+endif
 endif
 
 CFLAGS := $(CFLAGS) -pipe
@@ -78,6 +84,13 @@ ifdef CONFIG_MAC
 ARCHIVES := $(ARCHIVES) arch/m68k/mac/mac.o
 SUBDIRS := $(SUBDIRS) arch/m68k/mac
 endif
+
+ifdef CONFIG_BESTA
+ARCHIVES := $(ARCHIVES) arch/m68k/besta/besta.o
+SUBDIRS := $(SUBDIRS) arch/m68k/besta
+LIBS += arch/m68k/besta/VME.a
+endif
+
 
 # add in console.a after {amiga,atari}.o that need it
 ARCHIVES := $(ARCHIVES) arch/m68k/console/console.a
@@ -113,3 +126,8 @@ archclean:
 
 archdep:
 	$(MAKEBOOT) dep
+
+ifdef CONFIG_BESTA
+zlinux:
+	$(MAKE) -C arch/$(ARCH)/besta zlinux
+endif

@@ -136,8 +136,13 @@ void clear_page_tables(struct task_struct * tsk)
 		return;
 	}
 	flush_cache_mm(tsk->mm);
+#ifndef CONFIG_BESTA
 	for (i = 0 ; i < USER_PTRS_PER_PGD ; i++)
 		free_one_pgd(page_dir + i);
+#else
+	for (i = 0 ; i < PTRS_PER_PGD ; i++)
+		free_one_pgd(page_dir + i);
+#endif
 	flush_tlb_mm(tsk->mm);
 }
 
@@ -157,8 +162,13 @@ void free_page_tables(struct mm_struct * mm)
 		printk("Trying to free kernel page-directory: not good\n");
 		return;
 	}
+#ifndef CONFIG_BESTA
 	for (i = 0 ; i < USER_PTRS_PER_PGD ; i++)
 		free_one_pgd(page_dir + i);
+#else
+	for (i = 0 ; i < PTRS_PER_PGD ; i++)
+		free_one_pgd(page_dir + i);
+#endif
 	pgd_free(page_dir);
 }
 
@@ -291,6 +301,9 @@ int copy_page_range(struct mm_struct *dst, struct mm_struct *src,
 		if (error)
 			break;
 		address = (address + PGDIR_SIZE) & PGDIR_MASK;
+#ifdef CONFIG_BESTA
+		if (!address)  break;  /*  unsigned overflow   */
+#endif
 	}
 	/* Note that the src ptes get c-o-w treatment, so they change too. */
 	flush_tlb_range(src, vma->vm_start, vma->vm_end);
@@ -388,6 +401,9 @@ int zap_page_range(struct mm_struct *mm, unsigned long address, unsigned long si
 	while (address < end) {
 		zap_pmd_range(dir, address, end - address);
 		address = (address + PGDIR_SIZE) & PGDIR_MASK;
+#ifdef CONFIG_BESTA
+		if (!address)  break;  /*  unsigned overflow   */
+#endif
 		dir++;
 	}
 	flush_tlb_range(mm, end - size, end);
@@ -450,6 +466,9 @@ int zeromap_page_range(unsigned long address, unsigned long size, pgprot_t prot)
 		if (error)
 			break;
 		address = (address + PGDIR_SIZE) & PGDIR_MASK;
+#ifdef CONFIG_BESTA
+		if (!address)  break;  /*  unsigned overflow   */
+#endif
 		dir++;
 	}
 	flush_tlb_range(current->mm, beg, end);
@@ -522,6 +541,9 @@ int remap_page_range(unsigned long from, unsigned long offset, unsigned long siz
 		if (error)
 			break;
 		from = (from + PGDIR_SIZE) & PGDIR_MASK;
+#ifdef CONFIG_BESTA
+		if (!from)  break;  /*  unsigned overflow   */
+#endif
 		dir++;
 	}
 	flush_tlb_range(current->mm, beg, end);

@@ -12,9 +12,16 @@
 
 all: kernel.o head.o
 O_TARGET := kernel.o
+
+ifndef CONFIG_BESTA
 O_OBJS := entry.o process.o traps.o ints.o signal.o ptrace.o \
 	  setup.o bios32.o sys_m68k.o console.o time.o ksyms.o
+else
+O_OBJS := entry.o process.o traps.o ints.o signal.o ptrace.o \
+	  setup.o bios32.o sys_m68k.o time.o ksyms.o
+endif
 
-head.o: head.S
+head.o: head-besta.S
+	$(CC) -D__ASSEMBLY__ -traditional -c head-besta.S -o head.o
 
 include $(TOPDIR)/Rules.make

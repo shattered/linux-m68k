@@ -22,6 +22,12 @@
 #include <asm/segment.h>
 #include <asm/bitops.h>
 
+#ifdef CONFIG_BESTA
+static __inline int abs (int a) {
+	return  a >= 0 ? a : (-a);
+}
+#endif
+
 asmlinkage int sys_statfs(const char * path, struct statfs * buf)
 {
 	struct inode * inode;

@@ -56,6 +56,10 @@ extern int blk_dev_init(void);
 extern int scsi_dev_init(void);
 extern int net_dev_init(void);
 
+#ifdef CONFIG_BESTA
+extern void besta_dev_init (void);
+#endif
+
 /*
  * disk_name() is used by genhd.c and md.c.
  * It formats the devicename of the indicated disk
@@ -754,9 +758,9 @@ static int atari_partition (struct gendisk *hd, kdev_t dev,
         memcmp (pi->id, "SWP", 3) == 0 ||
         memcmp (pi->id, "RAW", 3) == 0 )
     {
-      printk(" ICD<");
       for (; pi < &rs->icdpart[8] && minor < m_lim; minor++, pi++)
       {
+	printk(" ICD<");
         /* accept only GEM,BGM,RAW,LNX,SWP partitions */
         if (pi->flg & 1 && 
             (memcmp (pi->id, "GEM", 3) == 0 ||
@@ -890,10 +894,19 @@ void device_setup(void)
 #ifdef CONFIG_SCSI
 	scsi_dev_init();
 #endif
+#ifdef CONFIG_BESTA
+	/*  Note: At this point we initialize all chr & blk devices,
+	  but only add net devices to the end of `dev_base' chain.
+	  (Net devs then will be initialized by `net_dev_init()').
+	*/
+	besta_dev_init();
+#endif
 #ifdef CONFIG_INET
 	net_dev_init();
 #endif
+#ifndef CONFIG_BESTA
 	console_map_init();
+#endif
 
 	for (p = gendisk_head ; p ; p=p->next) {
 		setup_dev(p);

@@ -10,7 +10,11 @@
  * this archive for more details.
  */
 
+#ifndef __besta__
 #include <stddef.h>
+#else
+#include <linux/stddef.h>
+#endif
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/mm.h>

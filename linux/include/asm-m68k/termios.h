@@ -1,6 +1,10 @@
 #ifndef _M68K_TERMIOS_H
 #define _M68K_TERMIOS_H
 
+#ifdef __besta__
+#include <linux/string.h>
+#endif
+
 #include <asm/termbits.h>
 #include <asm/ioctls.h>
  
@@ -28,7 +32,7 @@ struct termio {
 	reprint=^R	discard=^U	werase=^W	lnext=^V
 	eol2=\0
 */
-#define INIT_C_CC "\003\034\177\025\004\0\1\0\021\023\032\0\022\017\027\026\0"
+#define INIT_C_CC "\003\034\177\025\004\0\1\0\021\023\032\0\022\017\027\026\0\0"
 #endif
 
 /* modem lines */

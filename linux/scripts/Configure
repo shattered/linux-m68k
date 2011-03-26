@@ -81,31 +81,8 @@ function endmenu () {
 #       help variable
 #
 function help () {
-  if [ -f Documentation/Configure.help ]
-  then
-     #first escape regexp special characters in the argument:
-     var=$(echo "$1"|sed 's/[][\/.^$*]/\\&/g')
-     #now pick out the right help text:
-     text=$(sed -n "/^$var[ 	]*\$/,\${
-			/^$var[ 	]*\$/b
-			/^#.*/b
-			/^[ 	]*\$/q
-			p
-		    }" Documentation/Configure.help)
-     if [ -z "$text" ]
-     then
-	  echo; echo "  Sorry, no help available for this option yet.";echo
-     else
-	  (echo; echo "$text"; echo) | ${PAGER:-more}
-     fi
-  else
-     echo;
-     echo "  Can't access the file Documentation/Configure.help which"
-     echo "  should contain the help texts."
-     echo
-  fi
+  :
 }
-
 
 #
 # readln reads a line into $ans.

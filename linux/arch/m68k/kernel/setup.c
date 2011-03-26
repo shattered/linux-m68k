@@ -166,6 +166,7 @@ void setup_arch(char **cmdline_p,
 	*memory_start_p = memory_start;
 	*memory_end_p = memory_end;
 
+#ifndef CONFIG_BESTA
 	switch (boot_info.machtype) {
 #ifdef CONFIG_AMIGA
 	    case MACH_AMIGA:
@@ -190,6 +191,7 @@ void setup_arch(char **cmdline_p,
 	    default:
 		panic ("No configuration setup");
 	}
+#endif  /*  CONFIG_BESTA   */
 
 #ifdef CONFIG_BLK_DEV_INITRD
 	if (boot_info.ramdisk_size) {
@@ -248,7 +250,7 @@ int get_cpuinfo(char * buffer)
 		   "Calibration:\t%lu loops\n",
 		   cpu, mmu, fpu,
 		   clockfreq/1000000,(clockfreq/100000)%10,
-		   loops_per_sec/500000,(loops_per_sec/5000)%100,
+		   loops_per_sec/250000,(loops_per_sec/2500)%100,
 		   loops_per_sec));
 
 }
@@ -260,6 +262,7 @@ int get_hardware_list(char *buffer)
     u_long mem;
     int i;
 
+#ifndef CONFIG_BESTA
     switch (boot_info.machtype) {
 #ifdef CONFIG_AMIGA
 	case MACH_AMIGA:
@@ -280,12 +283,21 @@ int get_hardware_list(char *buffer)
 	    strcpy(model, "Unknown m68k");
     } /* boot_info.machtype */
 
+#else   /*  CONFIG_BESTA   */
+    {
+	extern void besta_get_model (char *model);
+
+	besta_get_model (model);
+    }
+#endif  /*  CONFIG_BESTA   */
+
     len += sprintf(buffer+len, "Model:\t\t%s\n", model);
     len += get_cpuinfo(buffer+len);
     for (mem = 0, i = 0; i < boot_info.num_memory; i++)
 	mem += boot_info.memory[i].size;
     len += sprintf(buffer+len, "System Memory:\t%ldK\n", mem>>10);
 
+#ifndef CONFIG_BESTA
     switch (boot_info.machtype) {
 #ifdef CONFIG_AMIGA
 	case MACH_AMIGA:
@@ -302,6 +314,14 @@ int get_hardware_list(char *buffer)
 	    break;
 #endif
     } /* boot_info.machtype */
+
+#else   /*  CONFIG_BESTA   */
+    {
+	extern int besta_get_hardware_list (char *);
+
+	len += besta_get_hardware_list (buffer + len);
+    }
+#endif  /*  CONFIG_BESTA   */
 
     return(len);
 }

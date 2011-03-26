@@ -17,7 +17,7 @@
 ENTRY(__down_failed)
 	moveml %a0/%d0/%d1,-(%sp)
 	movel %a1,-(%sp)
-	jbsr SYMBOL_NAME(__down)
+        jsr SYMBOL_NAME(__down)
 	movel (%sp)+,%a1
 	movel (%sp)+,%d0
 	movel (%sp)+,%d1

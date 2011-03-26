@@ -440,8 +440,10 @@ static void rd_load_image(kdev_t device,int offset, int unit)
 	kdev_t ram_device;
 	int nblocks, i;
 	char *buf;
+#ifndef CONFIG_BESTA
 	unsigned short rotate = 0;
 	char rotator[4] = { '|' , '/' , '-' , '\\' };
+#endif
 
 	ram_device = MKDEV(MAJOR_NR, unit);
 
@@ -495,6 +497,7 @@ static void rd_load_image(kdev_t device,int offset, int unit)
 	}
 
 	printk(KERN_NOTICE "RAMDISK: Loading %d blocks into ram disk... ", nblocks);
+#ifndef CONFIG_BESTA
 	for (i=0; i < nblocks; i++) {
 		infile.f_op->read(infile.f_inode, &infile, buf,
 				  BLOCK_SIZE);
@@ -505,6 +508,20 @@ static void rd_load_image(kdev_t device,int offset, int unit)
 			rotate++;
 		}
 	}
+
+#else   /*  CONFIG_BESTA   */
+
+	/*  This can be a simple head of image, without a zero tail.
+	   So, there may be number of blocks less then full `nblocks'.
+	*/
+	for (i = 0; i < nblocks; i++) {
+	    int n;
+	    n = infile.f_op->read (infile.f_inode, &infile, buf, BLOCK_SIZE);
+	    if (n <= 0)  break;
+	    outfile.f_op->write (outfile.f_inode, &outfile, buf, n);
+	}
+#endif  /*  CONFIG_BESTA   */
+
 	printk("done.\n");
 	kfree(buf);
 

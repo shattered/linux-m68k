@@ -117,7 +117,13 @@ typedef pte_table pte_tablepage[PTE_TABLES_PER_PAGE];
  * area for the same reason. ;)
  */
 #define VMALLOC_OFFSET	(8*1024*1024)
+#ifdef CONFIG_BESTA
+/*  we try to use physycal addresses, with empty areas etc...  */
+extern unsigned long highest_memory;
+#define VMALLOC_START ((highest_memory + VMALLOC_OFFSET) & ~(VMALLOC_OFFSET-1))
+#else   /*  CONFIG_BESTA   */
 #define VMALLOC_START ((high_memory + VMALLOC_OFFSET) & ~(VMALLOC_OFFSET-1))
+#endif  /*  CONFIG_BESTA   */
 #define VMALLOC_VMADDR(x) ((unsigned long)(x))
 
 #endif /* __ASSEMBLY__ */

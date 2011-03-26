@@ -20,8 +20,13 @@ FONTMAPFILE = cp437.uni
 
 L_TARGET := char.a
 M_OBJS   :=
+
+ifdef CONFIG_BESTA
+L_OBJS   := tty_io.o n_tty.o tty_ioctl.o pty.o mem.o random.o
+else
 L_OBJS   := tty_io.o n_tty.o tty_ioctl.o pty.o vt.o mem.o vc_screen.o \
             consolemap.o selection.o random.o
+endif
 
 ifeq "$(ARCH)" "i386"
 L_OBJS += console.o keyboard.o defkeymap.o
@@ -146,6 +151,10 @@ ifdef CONFIG_USERIAL
 S = y
 endif
 
+ifdef CONFIG_BESTA
+S = y
+endif
+
 ifdef S
 LX_OBJS += m68kserial.o
 else
@@ -246,29 +255,7 @@ endif
 
 ifeq ($(ARCH),m68k)
   ifeq ($(CONFIG_PRINTER),y)
-  L = y
-  L_OBJS += lp_intern.o
-  else
-    ifeq ($(CONFIG_PRINTER),m)
-    M_OBJS += lp_intern.o
-    LM = m
-    endif
-  endif
-  ifeq ($(CONFIG_MULTIFACE_III_LP),y)
-  L = y
-  L_OBJS += lp_mfc.o
-  else 
-    ifeq ($(CONFIG_MULTIFACE_III_LP),m)
-    M_OBJS += lp_mfc.o
-    LM = m
-    endif
-  endif
-  ifdef L
-    LX_OBJS += lp_m68k.o
-  else
-    ifdef LM
-      MX_OBJS += lp_m68k.o
-    endif
+  L_OBJS += lp_m68k.o lp_intern.o
   endif
 else
   ifeq ($(CONFIG_PRINTER),y)
@@ -277,7 +264,7 @@ else
     ifeq ($(CONFIG_PRINTER),m)
     M_OBJS += lp.o
     endif
-  endif
+endif
 endif
 
 ifeq ($(CONFIG_MS_BUSMOUSE),y)

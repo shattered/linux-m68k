@@ -166,6 +166,12 @@ struct bi_Atari {
 	unsigned long mch_cookie;		/* _MCH cookie from TOS */
 };
 
+#ifdef CONFIG_BESTA
+struct bi_hcpu30 {
+	unsigned long data[4];  /*  most universal way  */
+};
+#endif
+
 /* mch_cookie values (upper word) */
 #define	ATARI_MCH_ST		0
 #define	ATARI_MCH_STE		1
@@ -336,6 +342,9 @@ struct bootinfo {
 	union {
 		struct bi_Amiga bi_ami; 	/* Amiga specific information */
 		struct bi_Atari bi_ata; 	/* Atari specific information */
+#ifdef CONFIG_BESTA
+		struct bi_hcpu30 bi_hcpu30;     /* HCPU30 specific information */
+#endif
 	} bi_un;
 };
 #define bi_amiga bi_un.bi_ami

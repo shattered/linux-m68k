@@ -131,7 +131,11 @@ static int serial_refcount;
 
 #define _INLINE_ inline
 
+#ifdef CONFIG_BESTA
+#define NR_PORTS	64
+#else
 #define NR_PORTS	6
+#endif
 
 struct async_struct rs_table[NR_PORTS];
 static struct tty_struct *serial_table[NR_PORTS];
@@ -168,6 +172,8 @@ static int proc_serial_read (char *buffer, char **start, off_t offset,
     len = sprintf (buffer, "Serial ports:\n");
     for (i = 0; i < NR_PORTS; ++i) {
 	if (!rs_table[i].port) continue;
+
+#ifndef CONFIG_BESTA
 	if (rs_table[i].type >= 0 && rs_table[i].type < PORT_MAX)
 	    name = serialtypes[rs_table[i].type];
 #ifdef __mc68000__
@@ -177,6 +183,19 @@ static int proc_serial_read (char *buffer, char **start, off_t offset,
 #endif
 	else
 	    name = "unknown";
+
+#else   /*  CONFIG_BESTA   */
+
+	/*  There is a lot of serial types possible on the VME board.
+	   So, go to machine specific immediately...
+	*/
+	{
+	    extern char *besta_get_serial_type (int);
+
+	    name = besta_get_serial_type (rs_table[i].type);
+	}
+#endif  /*  CONFIG_BESTA   */
+
 	len += sprintf (buffer + len, "\tttyS%d: %s at 0x%08x.\n", i, name,
 			rs_table[i].port);
     }
@@ -416,6 +435,7 @@ static void rs_put_char(struct tty_struct *tty, unsigned char ch)
 		return;
 
 	save_flags(flags); cli();
+
 	if (info->xmit_cnt >= SERIAL_XMIT_SIZE - 1) {
 		restore_flags(flags);
 		return;
@@ -473,6 +493,7 @@ static int rs_write(struct tty_struct * tty, int from_user,
 			memcpy(info->xmit_buf + info->xmit_head, tmp_buf, c);
 		} else
 			memcpy(info->xmit_buf + info->xmit_head, buf, c);
+
 		info->xmit_head = (info->xmit_head + c) & (SERIAL_XMIT_SIZE-1);
 		info->xmit_cnt += c;
 		restore_flags(flags);
@@ -941,8 +962,14 @@ static void rs_set_termios(struct tty_struct *tty, struct termios *old_termios)
 {
 	struct async_struct *info = (struct async_struct *)tty->driver_data;
 
+#ifndef CONFIG_BESTA
 	if (tty->termios->c_cflag == old_termios->c_cflag)
 		return;
+#else
+	if (tty->termios->c_cflag == old_termios->c_cflag &&
+	    tty->termios->c_iflag == old_termios->c_iflag)
+		return;
+#endif
 
 	info->sw->change_speed(info);
 

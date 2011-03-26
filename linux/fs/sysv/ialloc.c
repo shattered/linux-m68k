@@ -176,7 +176,7 @@ struct inode * sysv_new_inode(const struct inode * dir)
 
 unsigned long sysv_count_free_inodes(struct super_block * sb)
 {
-#if 1 /* test */
+#if 0 /* test */
 	struct buffer_head * bh;
 	struct sysv_inode * raw_inode;
 	int j,block,count;

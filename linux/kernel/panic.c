@@ -44,7 +44,9 @@ NORET_TYPE void panic(const char * fmt, ...)
 	else
 		sys_sync();
 
+#ifndef CONFIG_BESTA
 	do_unblank_screen();
+#endif
 
 	if (panic_timeout > 0)
 	{

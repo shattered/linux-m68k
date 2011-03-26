@@ -276,12 +276,14 @@ static void ext2_setup_super (struct super_block * sb,
 {
 	int bs = BYTE_SWAP(sb->u.ext2_sb.s_byte_swapped);
 
+#ifndef __besta__
 	if (!bs){
 		printk("EXT2-fs warning: old big-endian filesystem detected!\n");
 		printk("EXT2-fs warning: support for this filesystem will disappear in future kernels.\n");
 		printk("EXT2-fs warning: please run 'e2fsck -s' from e2fsprogs-1.06-fix or later\n");
 		printk("EXT2-fs warning: to convert it to the new standard.\n");
 	}
+#endif
 	if (e_swab (bs, es->s_rev_level) > EXT2_MAX_SUPP_REV) {
 			printk ("EXT2-fs warning: revision level too high, "
 				"forcing read/only mode\n");

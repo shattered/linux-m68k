@@ -8,7 +8,9 @@
 
 #ifdef __KERNEL__
 
+#if !defined(CONFIG_BESTA) && !defined(__besta__)
 #define STRICT_MM_TYPECHECKS
+#endif
 
 #ifdef STRICT_MM_TYPECHECKS
 /*

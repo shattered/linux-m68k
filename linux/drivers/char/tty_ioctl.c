@@ -18,6 +18,7 @@
 #include <linux/fcntl.h>
 #include <linux/string.h>
 #include <linux/mm.h>
+#include <linux/malloc.h>
 
 #include <asm/io.h>
 #include <asm/bitops.h>
@@ -39,6 +40,150 @@
 #define TERMIOS_FLUSH	1
 #define TERMIOS_WAIT	2
 #define TERMIOS_TERMIO	4
+
+
+static int get_extty_stuff (struct tty_struct *tty, struct extty *stuff) {
+	struct extty *extty = tty->disc_data;
+	struct extty tmp;
+	int res;
+
+	res = verify_area (VERIFY_WRITE, (void *) stuff, sizeof (*stuff));
+	if (res)  return res;
+
+	if (!extty) {
+	    memset (&tmp, 0, sizeof (tmp));
+	    memcpy_tofs (stuff, &tmp, sizeof (*stuff));
+
+	    return 0;
+	}
+
+	memcpy_fromfs (&tmp, stuff, sizeof (tmp));
+
+	tmp.dg_emu_flag = extty->dg_emu_flag;
+	tmp.dg_emu_020 = extty->dg_emu_020;
+	tmp.alt_set_flag = extty->alt_set_flag;
+	tmp.alt_switch_char = extty->alt_switch_char;
+
+	if (tmp.base_input_set) {
+	    if (extty->base_input_set) {
+		res = verify_area (VERIFY_WRITE, tmp.base_input_set,
+					    		EXTTY_SET_SIZE);
+		if (res)  return res;
+
+		memcpy_tofs (tmp.base_input_set, extty->base_input_set,
+					    		EXTTY_SET_SIZE);
+	    } else
+		tmp.base_input_set = NULL;	/*  Ugly ???  */
+	}
+
+	if (tmp.alt_input_set) {
+	    if (extty->alt_input_set) {
+		res = verify_area (VERIFY_WRITE, tmp.alt_input_set,
+					    		EXTTY_SET_SIZE);
+		if (res)  return res;
+
+		memcpy_tofs (tmp.alt_input_set, extty->alt_input_set,
+					    		EXTTY_SET_SIZE);
+	    } else
+		tmp.alt_input_set = NULL;	/*  Ugly ???  */
+	}
+	
+	if (tmp.output_set) {
+	    if (extty->output_set) {
+		res = verify_area (VERIFY_WRITE, tmp.output_set,
+					    		EXTTY_SET_SIZE);
+		if (res)  return res;
+
+		memcpy_tofs (tmp.output_set, extty->output_set,
+					    		EXTTY_SET_SIZE);
+	    } else
+		tmp.output_set = NULL;	/*  Ugly ???  */
+	}
+
+	memcpy_tofs (stuff, &tmp, sizeof (*stuff));
+
+	return 0;
+}
+	
+static int extty_set_set (unsigned char *from, unsigned char **setp) {
+	int res, i;
+
+	if (from) {
+	    res = verify_area (VERIFY_READ, from, EXTTY_SET_SIZE);
+	    if (res)  return res;
+
+	    if (!*setp)
+		*setp = kmalloc (EXTTY_SET_SIZE, GFP_KERNEL);
+	    if (!*setp)  return -ENOMEM;
+
+	    memcpy_fromfs (*setp, from, EXTTY_SET_SIZE);
+
+	    /*  checking for transparent set ...  */
+	    for (i = 0; i < EXTTY_SET_SIZE; i++) 
+		if ((*setp)[i] != i)  break;
+	    if (i >= EXTTY_SET_SIZE) {	/*  i.e., transparent now   */
+		kfree (*setp);
+		*setp = NULL;
+	    }
+	} else {
+	    if (*setp)  kfree (*setp);
+	    *setp = NULL;
+	}
+
+	return 0;
+}
+
+static int set_extty_stuff (struct tty_struct *tty, struct extty *stuff) {
+	struct extty *extty = tty->disc_data;
+	struct extty tmp;
+	int res = 0;
+
+	res = verify_area (VERIFY_READ, (void *) stuff, sizeof (*stuff));
+	if (res)  return res;
+
+	memcpy_fromfs (&tmp, stuff, sizeof (tmp));
+
+	if (!tmp.base_input_set && !tmp.alt_input_set &&
+	    !tmp.output_set && !tmp.dg_emu_flag && !tmp.alt_switch_char
+	) {	/*  set nothing...  */
+	    res = 0;
+	    goto free_exit;
+	}
+
+	if (!extty) {
+	    extty = tty->disc_data = kmalloc (sizeof (*extty), GFP_KERNEL);
+	    if (!extty)  return -ENOMEM;
+
+	    memset (extty, 0, sizeof (*extty));
+	}
+
+	extty->dg_emu_flag = tmp.dg_emu_flag;
+	extty->dg_emu_020 = 0;
+	extty->alt_set_flag = tmp.alt_set_flag;
+	extty->alt_switch_char = tmp.alt_switch_char;
+
+	res = extty_set_set (tmp.base_input_set, &extty->base_input_set);
+	if (res)  goto free_exit;
+	res = extty_set_set (tmp.alt_input_set, &extty->alt_input_set);
+	if (res)  goto free_exit;
+	res = extty_set_set (tmp.output_set, &extty->output_set);
+	if (res)  goto free_exit;
+
+	return 0;
+
+free_exit:
+	if (extty) {
+	    if (extty->base_input_set)  kfree (extty->base_input_set);
+	    if (extty->alt_input_set)  kfree (extty->alt_input_set);
+	    if (extty->output_set)  kfree (extty->output_set);
+	
+	    kfree (extty);
+	}
+	tty->disc_data = NULL;
+
+	return res;
+}
+
 
 void tty_wait_until_sent(struct tty_struct * tty, int timeout)
 {
@@ -542,6 +687,13 @@ int n_tty_ioctl(struct tty_struct * tty, struct file * file,
 				return 0;
 			tty->driver.ioctl(tty, file, cmd, arg);
 			return 0;
+
+		case TIOCGEXTTY:
+			return  get_extty_stuff (tty, (struct extty *) arg);
+
+		case TIOCSEXTTY:
+			return  set_extty_stuff (tty, (struct extty *) arg);
+
 		default:
 			return -ENOIOCTLCMD;
 		}

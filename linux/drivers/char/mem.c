@@ -122,6 +122,14 @@ static int mmap_mem(struct inode * inode, struct file * file, struct vm_area_str
 	if (x86 > 3 && vma->vm_offset >= high_memory)
 		pgprot_val(vma->vm_page_prot) |= _PAGE_PCD;
 #endif
+#ifdef CONFIG_BESTA
+#ifdef __mc68000__
+	/*  We must disable high-memory cashing,
+	   because there may be device ports.   */
+	if (vma->vm_offset >= high_memory)
+		pgprot_val (vma->vm_page_prot) |= _PAGE_NOCACHE030;
+#endif
+#endif
 	if (remap_page_range(vma->vm_start, vma->vm_offset, vma->vm_end - vma->vm_start, vma->vm_page_prot))
 		return -EAGAIN;
 	vma->vm_inode = inode;

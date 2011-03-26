@@ -797,6 +797,7 @@ int do_munmap(unsigned long addr, size_t len)
 {
 	struct vm_area_struct *mpnt, *prev, *next, **npp, *free;
 
+#ifndef CONFIG_BESTA
 	if ((addr & ~PAGE_MASK) || addr > MAX_USER_ADDR || len > MAX_USER_ADDR-addr)
 		return -EINVAL;
 
@@ -812,6 +813,29 @@ int do_munmap(unsigned long addr, size_t len)
 	mpnt = find_vma(current->mm, addr);
 	if (!mpnt)
 		return 0;
+
+#else  /*  CONFIG_BESTA   */
+	/*  We can have mmap to areas higher than TASK_SIZE (sys_phys call,
+	  `ios' drivers by svr3, etc.).
+	    So, allow the `addr' to be higher than TASK_SIZE, and then
+	   find the vma. If vma is not found, check `addr' for ordinary
+	   Linux behavior, else continue play with this vma...
+	*/
+
+	if (addr & ~PAGE_MASK)  return -EINVAL;
+
+	mpnt = find_vma(current->mm, addr);
+	if (!mpnt)  {
+		if (addr > TASK_SIZE || len > TASK_SIZE - addr)
+			return -EINVAL;
+		else
+			return 0;
+	}
+
+	if ((len = PAGE_ALIGN(len)) == 0)  return 0;
+
+#endif  /*  CONFIG_BESTA   */
+
 	avl_neighbours(mpnt, current->mm->mmap_avl, &prev, &next);
 	/* we have  prev->vm_next == mpnt && mpnt->vm_next = next */
 	/* and  addr < mpnt->vm_end  */

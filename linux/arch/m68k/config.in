@@ -24,7 +24,11 @@ comment 'Platform dependant setup'
 bool 'Amiga support' CONFIG_AMIGA
 bool 'Atari support' CONFIG_ATARI
 bool 'Macintosh support' CONFIG_MAC
-
+bool 'Besta support' CONFIG_BESTA
+if [ "$CONFIG_BESTA" = "y" ]; then
+  bool 'HCPU30 support' CONFIG_HCPU30
+  bool 'CP2x/CP3x support' CONFIG_CP31
+fi
 comment 'Processor type'
 bool '68020 support' CONFIG_M68020
 bool '68030 support' CONFIG_M68030

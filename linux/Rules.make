@@ -52,6 +52,22 @@ first_rule: sub_dirs
 %.o: %.s
 	$(AS) $(ASFLAGS) $(EXTRA_CFLAGS) -o $@ $<
 
+ifdef SMP
+
+%.s: %.S
+	$(CC) -D__ASSEMBLY__ $(AFLAGS) -traditional -Wa,-m68030 -E -o $*.s $<
+%.o: %.S
+	$(CC) -D__ASSEMBLY__ $(AFLAGS) -traditional -Wa,-m68030 -c -o $*.o $<
+
+else
+
+%.s: %.S
+	$(CC) -D__ASSEMBLY__ -traditional -Wa,-m68030 -E -o $*.s $<
+%.o: %.S
+	$(CC) -D__ASSEMBLY__ -traditional -Wa,-m68030 -c -o $*.o $<
+
+endif
+
 #
 #
 #

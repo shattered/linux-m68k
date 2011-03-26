@@ -96,7 +96,9 @@ void unplug_device(void * data)
 		dev->current_request = next;
 		if (next) {
 			dev->plug.next = NULL;
+#ifndef __besta__
 			restore_flags(flags); /* XXX */
+#endif
 			(dev->request_fn)();
 		}
 	}
@@ -261,8 +263,13 @@ void add_request(struct blk_dev_struct * dev, struct request * req)
 		mark_buffer_clean(req->bh);
 	if (!(tmp = dev->current_request)) {
 		dev->current_request = req;
+#ifndef __besta__
 		sti(); /* XXX */
+#endif
 		(dev->request_fn)();
+#ifdef __besta__
+		sti();
+#endif
 		return;
 	}
 	for ( ; tmp->next ; tmp = tmp->next) {
@@ -274,10 +281,15 @@ void add_request(struct blk_dev_struct * dev, struct request * req)
 	req->next = tmp->next;
 	tmp->next = req;
 
+#ifndef __besta__
 	sti(); /* XXX */
+#endif
 /* for SCSI devices, call request_fn unconditionally */
 	if (scsi_blk_major(MAJOR(req->rq_dev)))
 		(dev->request_fn)();
+#ifdef __besta__
+	sti();
+#endif
 
 }
 

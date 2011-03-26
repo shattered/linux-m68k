@@ -306,6 +306,26 @@ static void setup_frame (struct sigaction * sa, struct pt_regs *regs,
 /* Flush caches so the instructions will be correctly executed. (MA) */
 	cache_push_v ((unsigned long)frame, (int)tframe - (int)frame);
 
+#ifdef CONFIG_BESTA
+	if (current->personality == PER_SVR3) {
+	    extern unsigned char linux_svr3_sig[];
+	    int signum;
+
+	    frame -= 3;    /*  Additional 3 longwords: sig,something,0  */
+	    if (verify_area (VERIFY_WRITE, frame, 3 * sizeof(long)))
+			do_exit (SIGSEGV);
+
+	    signum = linux_svr3_sig[signr];
+	    if (!signum)  do_exit (SIGSEGV);    /*  Never should be happen. */
+
+	    put_fs_long (signum, frame);
+	    put_fs_long (0, &frame[1]);  /* Don`t know what should be hear.  */
+	    put_fs_long (0, &frame[2]);  /*  CCR`s , not very accuracy.   */
+
+	    cache_push_v ((unsigned long) frame, 12);
+	}
+#endif  /* CONFIG_BESTA  */
+
 /* setup and copy the sigcontext structure */
 	context.sc_mask       = oldmask;
 	context.sc_usp	      = rdusp();

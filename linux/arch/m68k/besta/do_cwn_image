@@ -1,0 +1,35 @@
+TMPLD=/tmp/cwn_soft.ld
+TMPOUT=cwn_soft.out
+
+CODE_START="`nm -x ${1:-cwn_soft.o} | sed -n '/^cwn_soft_code_start/ s/^cwn_soft_code_start *|\([0-9abcdefx]*\).*/\1/p' `"
+
+cat > $TMPLD <<!
+MEMORY {
+        valid : org = 0x0, len = 0x2000
+}
+SECTIONS {
+        .text $CODE_START : {
+                *(.text) *(.data) *(.bss)
+        }
+        .data : { *(.happy0) }
+        .bss  : { *(.happy1) }
+}
+cwn_soft_entry = _start;
+!
+
+ld -o $TMPOUT $TMPLD ${1:-cwn_soft.o}
+nm -x $TMPOUT | sed -n '/^cwn_soft_/ s/^\(cwn_soft_[^ |]*\) *|\([0-9abcdefx]*\).*/\1 = \2;/p' > $TMPLD
+strip $TMPOUT
+
+cat >> $TMPLD <<!
+SECTIONS {
+        .data : {
+            cwn_soft_start = .;
+            *(.text) *(.data) *(.bss)
+            cwn_soft_end = .;
+        }
+}
+!
+
+ld -r -o ${2:-cwn_image.o} $TMPLD $TMPOUT 2>/dev/null
+rm -f $TMPLD $TMPOUT

@@ -33,6 +33,9 @@
 #include <linux/mm.h>
 #include <linux/string.h>
 #include <linux/malloc.h>
+#ifdef CONFIG_BESTA
+#include <linux/personality.h>
+#endif
 
 #include <asm/segment.h>
 #include <asm/system.h>
@@ -55,6 +58,61 @@
 #define TTY_THRESHOLD_THROTTLE		(N_TTY_BUF_SIZE - 128)
 #define TTY_THRESHOLD_UNTHROTTLE 	128
 
+
+/*      Extended stuff for ordinary n_tty.c ...     */
+
+static void put_char (unsigned char c, struct tty_struct *tty)
+{
+	struct extty *extty = tty->disc_data;
+
+	if (extty) {
+
+	    if (extty->dg_emu_flag) {
+		if (c == 020)  /*  d211 cup sequence start...  */
+		    extty->dg_emu_020 = 2;
+		else if (extty->dg_emu_020 <= 0) {
+#ifdef CONFIG_BESTA
+		    if (c == '\b' && 
+			(intr_count || current->personality != PER_SVR3))
+#else
+		    if (c == '\b')
+#endif
+			    c = 031;	/*  ^Y   */
+		} else
+		    extty->dg_emu_020--;
+	    }
+
+	    if (extty->output_set) 
+		c = extty->output_set[c];
+	}
+		
+	tty->driver.put_char(tty, c);
+}
+
+static int driver_write (struct tty_struct *tty, int from_user,
+				const unsigned char *buf, int count) {
+	struct extty *extty = tty->disc_data;
+	int total;
+
+	if (!extty || !(extty->dg_emu_flag || extty->output_set))
+	    return  tty->driver.write (tty, from_user, buf, count);
+
+	for (total = 0; total < count; total++) {
+	    unsigned char c;
+
+	    if (from_user)  c = get_user (buf);
+	    else  c = *buf;
+	    buf++;
+
+	    put_char (c, tty);
+	}
+
+	if (tty->driver.flush_chars)
+		tty->driver.flush_chars (tty);
+
+	return total;	/*  may be not true value...  */
+}
+	    
 static inline void put_tty_queue(unsigned char c, struct tty_struct *tty)
 {
 	if (tty->read_cnt < N_TTY_BUF_SIZE) {
@@ -119,7 +177,7 @@ static int opost(unsigned char c, struct tty_struct *tty)
 			if (O_ONLCR(tty)) {
 				if (space < 2)
 					return -1;
-				tty->driver.put_char(tty, '\r');
+				put_char ('\r', tty);
 				tty->column = 0;
 			}
 			tty->canon_column = tty->column;
@@ -141,7 +199,7 @@ static int opost(unsigned char c, struct tty_struct *tty)
 				if (space < spaces)
 					return -1;
 				tty->column += spaces;
-				tty->driver.write(tty, 0, "        ", spaces);
+				driver_write(tty, 0, "        ", spaces);
 				return 0;
 			}
 			tty->column += spaces;
@@ -158,13 +216,8 @@ static int opost(unsigned char c, struct tty_struct *tty)
 			break;
 		}
 	}
-	tty->driver.put_char(tty, c);
+	put_char(c, tty);
 	return 0;
-}
-
-static inline void put_char(unsigned char c, struct tty_struct *tty)
-{
-	tty->driver.put_char(tty, c);
 }
 
 /* Must be called only when L_ECHO(tty) is true. */
@@ -356,6 +409,8 @@ static inline void n_tty_receive_parity_error(struct tty_struct *tty,
 
 static inline void n_tty_receive_char(struct tty_struct *tty, unsigned char c)
 {
+	struct extty *extty = tty->disc_data;
+
 	if (tty->raw) {
 		put_tty_queue(c, tty);
 		return;
@@ -366,6 +421,19 @@ static inline void n_tty_receive_char(struct tty_struct *tty, unsigned char c)
 		return;
 	}
 	
+	if (extty) {
+	    unsigned char *set;
+
+	    if (c && extty->alt_switch_char == c) {
+		extty->alt_set_flag = !extty->alt_set_flag;
+		return;
+	    }
+
+	    set = extty->alt_set_flag ? extty->alt_input_set
+				      : extty->base_input_set;
+	    if (set)  c = set[c];
+	}
+
 	if (I_ISTRIP(tty))
 		c &= 0x7f;
 	if (I_IUCLC(tty) && L_IEXTEN(tty))
@@ -690,12 +758,56 @@ static void n_tty_set_termios(struct tty_struct *tty, struct termios * old)
 	}
 }
 
+
+/*  primitive list for serial_driver...  */
+static struct extty *extty_serial_list[64] = { NULL, };	/*  64--ugly... */
+
+static void store_extty (struct tty_struct *tty) {
+	int idx = MINOR (tty->device) - tty->driver.minor_start;
+
+	if (idx >= sizeof (extty_serial_list) / sizeof (*extty_serial_list))
+		return;
+
+	extty_serial_list[idx] = tty->disc_data;
+	tty->disc_data = NULL;
+}
+
+static struct extty *find_extty (struct tty_struct *tty) {
+	int idx = MINOR (tty->device) - tty->driver.minor_start;
+
+	if (idx >= sizeof (extty_serial_list) / sizeof (*extty_serial_list))
+		return NULL;
+	
+	tty->disc_data = extty_serial_list[idx];
+	extty_serial_list[idx] = NULL;
+
+	return tty->disc_data;
+}
+
+
 static void n_tty_close(struct tty_struct *tty)
 {
 	n_tty_flush_buffer(tty);
 	if (tty->read_buf) {
 		free_page((unsigned long) tty->read_buf);
 		tty->read_buf = 0;
+	}
+	
+	if (tty->disc_data) {
+	    struct extty *extty = tty->disc_data;
+
+	    /*  ...and may be _TYPE_CONSOLE  too ???  */
+	    if (tty->driver.type != TTY_DRIVER_TYPE_SERIAL) {
+
+		if (extty->base_input_set)  kfree (extty->base_input_set);
+		if (extty->alt_input_set)  kfree (extty->alt_input_set);
+		if (extty->output_set)  kfree (extty->output_set);
+
+		kfree (extty);
+	    } else 
+		store_extty (tty);
+
+	    tty->disc_data = 0;
 	}
 }
 
@@ -718,6 +830,10 @@ static int n_tty_open(struct tty_struct *tty)
 	n_tty_set_termios(tty, 0);
 	tty->minimum_to_wake = 1;
 	tty->closing = 0;
+
+	if (tty->driver.type == TTY_DRIVER_TYPE_SERIAL)   /*  _CONSOLE too ?? */
+	    tty->disc_data = find_extty (tty);
+	    
 	return 0;
 }
 
@@ -965,7 +1081,7 @@ static int write_chan(struct tty_struct * tty, struct file * file,
 			if (tty->driver.flush_chars)
 				tty->driver.flush_chars(tty);
 		} else {
-			c = tty->driver.write(tty, 1, b, nr);
+			c = driver_write(tty, 1, b, nr);
 			b += c;
 			nr -= c;
 		}

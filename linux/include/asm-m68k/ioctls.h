@@ -44,6 +44,10 @@
 #define TIOCGETD	0x5424
 #define TCSBRKP		0x5425	/* Needed for POSIX tcsendbreak() */
 #define TIOCTTYGSTRUCT	0x5426  /* For debugging only */
+#if 1	/*  extty   */
+#define TIOCGEXTTY	0x5430
+#define TIOCSEXTTY	0x5431
+#endif
 #define FIONCLEX	0x5450  /* these numbers need to be adjusted. */
 #define FIOCLEX		0x5451
 #define FIOASYNC	0x5452

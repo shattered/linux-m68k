@@ -117,9 +117,15 @@ struct xenix_freelist_chunk {
 /* SystemV4 super-block data on disk */
 struct sysv4_super_block {
 	unsigned short s_isize; /* index of first data zone */
+#ifdef CONFIG_BESTA
+	short align_filler0;
+#endif
 	unsigned long  s_fsize;	/* total number of zones of this fs */
 	/* the start of the free block list: */
 	unsigned short s_nfree;	/* number of free blocks in s_free, <= SYSV_NICFREE */
+#ifdef CONFIG_BESTA
+	short align_filler1;
+#endif
 	unsigned long  s_free[SYSV_NICFREE]; /* first free block list chunk */
 	/* the cache of free inodes: */
 	unsigned short s_ninode; /* number of free inodes in s_inode, <= SYSV_NICINOD */
@@ -129,12 +135,18 @@ struct sysv4_super_block {
 	char	       s_ilock;	/* lock during inode cache manipulation */
 	char	       s_fmod;	/* super-block modified flag */
 	char	       s_ronly;	/* flag whether fs is mounted read-only */
+#ifdef CONFIG_BESTA
+	short          align_filler2;
+#endif
 	unsigned long  s_time;	/* time of last super block update */
 	short	       s_dinfo[4];	/* device information ?? */
 	unsigned long  s_tfree;	/* total number of free zones */
 	unsigned short s_tinode;	/* total number of free inodes */
 	char	       s_fname[6];	/* file system volume name */
 	char	       s_fpack[6];	/* file system pack name */
+#ifdef CONFIG_BESTA
+	short          align_filler3;
+#endif
 	long	       s_fill[12];
 	long	       s_state;		/* file system state: 0x7c269d38-s_time means clean */
 	long	       s_magic;		/* version of file system */
@@ -145,6 +157,9 @@ struct sysv4_super_block {
 /* SystemV4 free list block on disk */
 struct sysv4_freelist_chunk {
 	unsigned short fl_nfree;	/* number of free blocks in fl_free, <= SYSV_NICFREE] */
+#ifdef CONFIG_BESTA
+	short          align_filler0;
+#endif
 	unsigned long  fl_free[SYSV_NICFREE];
 };
 
@@ -178,6 +193,9 @@ struct sysv2_super_block {
 
 /* SystemV2 free list block on disk */
 struct sysv2_freelist_chunk {
+#ifdef CONFIG_BESTA
+	unsigned short align_filler;	/*  for SVR3.1 S51K   */
+#endif
 	unsigned short fl_nfree;	/* number of free blocks in fl_free, <= SYSV_NICFREE] */
 	unsigned long  fl_free[SYSV_NICFREE] __packed2__;
 };

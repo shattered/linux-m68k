@@ -29,11 +29,11 @@ FINDHPATH	= $(HPATH)/asm $(HPATH)/linux $(HPATH)/scsi $(HPATH)/net
 HOSTCC  	=gcc -I$(HPATH)
 HOSTCFLAGS	=-O2 -fomit-frame-pointer
 
-CROSS_COMPILE 	=
+CROSS_COMPILE   = m68k-motorola-svr3-
 
 AS	=$(CROSS_COMPILE)as
 LD	=$(CROSS_COMPILE)ld
-CC	=$(CROSS_COMPILE)gcc -D__KERNEL__ -I$(HPATH)
+CC      =$(CROSS_COMPILE)gcc -D__KERNEL__ -D__ELF__ -I$(HPATH)
 CPP	=$(CC) -E
 AR	=$(CROSS_COMPILE)ar
 NM	=$(CROSS_COMPILE)nm
@@ -87,7 +87,8 @@ SVGA_MODE=	-DSVGA_MODE=NORMAL_VGA
 # standard CFLAGS
 #
 
-CFLAGS = -Wall -Wstrict-prototypes -O2 -fomit-frame-pointer -fno-strength-reduce
+#CFLAGS = -Wall -Wstrict-prototypes -O2 -fomit-frame-pointer -fno-strength-reduce
+CFLAGS = -D__besta__ -D__mc68000__ -Wall -Wstrict-prototypes -O2 -fomit-frame-pointer -fno-strength-reduce
 
 ifdef CONFIG_CPP
 CFLAGS := $(CFLAGS) -x c++
@@ -151,22 +152,6 @@ DRIVERS := $(DRIVERS) drivers/block/paride/paride.a
 endif
 
 include arch/$(ARCH)/Makefile
-
-ifdef SMP
-
-.S.s:
-	$(CC) -D__ASSEMBLY__ $(AFLAGS) -traditional -E -o $*.s $<
-.S.o:
-	$(CC) -D__ASSEMBLY__ $(AFLAGS) -traditional -c -o $*.o $<
-
-else
-
-.S.s:
-	$(CC) -D__ASSEMBLY__ -traditional -E -o $*.s $<
-.S.o:
-	$(CC) -D__ASSEMBLY__ -traditional -c -o $*.o $<
-
-endif
 
 Version: dummy
 	@rm -f include/linux/compile.h
@@ -314,6 +299,16 @@ modules modules_install: dummy
 	@exit 1
 endif
 
+ifdef CONFIG_BESTA
+clean:  archclean
+	rm -f kernel/ksyms.lst include/linux/compile.h
+	rm -f core `find . -name '*.[oas]'  -print`
+	rm -f core `find . -type f -name 'core' -print`
+	rm -f vmlinux System.map zlinux
+	rm -f .tmp* drivers/sound/configure
+	rm -fr modules/*
+	rm -f submenu*
+else
 clean:	archclean
 	rm -f kernel/ksyms.lst include/linux/compile.h
 	rm -f core `find . -name '*.[oas]' ! -regex '.*lxdialog/.*' -print`
@@ -322,6 +317,7 @@ clean:	archclean
 	rm -f .tmp* drivers/sound/configure
 	rm -fr modules/*
 	rm -f submenu*
+endif
 
 mrproper: clean
 	rm -f include/linux/autoconf.h include/linux/version.h

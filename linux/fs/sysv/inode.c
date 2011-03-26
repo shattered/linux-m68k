@@ -261,10 +261,29 @@ static struct super_block * detected_sysv2 (struct super_block *sb, struct buffe
 			return NULL;
 	}
 
+#ifdef CONFIG_BESTA
+	if (sbd->s_state != 0x7c269d38 - sbd->s_time)
+		printk("SysV FS: Mounting unchecked file system, "
+		       "running fsck is recommended.\n");
+	if (!(sb->s_flags & MS_RDONLY)) {
+	    if (sbd->s_state != 0x7c269d38 - sbd->s_time)
+		    sbd->s_state = 0xcb096f43;  /*  Fs_BAD   */
+	    else
+		    sbd->s_state = 0x5e72d81a;  /*  Fs_ACTIVE  */
+
+	    mark_buffer_dirty(bh, 1);
+	    sb->s_dirt = 1;     /*  not very accuracy while...  */
+	}
+#endif
+
 	sb->sv_convert = 0;
 	sb->sv_kludge_symlinks = 0; /* ?? */
 	sb->sv_truncate = 1;
+#ifdef CONFIG_BESTA
+	sb->sv_link_max = 1000;
+#else
 	sb->sv_link_max = SYSV_LINK_MAX;
+#endif
 	sb->sv_fic_size = SYSV_NICINOD;
 	sb->sv_flc_size = SYSV_NICFREE;
 	sb->sv_bh1 = bh;
@@ -506,6 +525,13 @@ void sysv_write_super (struct super_block *sb)
 		if (sb->sv_type == FSTYPE_SYSV4)
 			if (*sb->sv_sb_state == 0x7c269d38 - old_time)
 				*sb->sv_sb_state = 0x7c269d38 - time;
+#ifdef CONFIG_BESTA
+		if (!(sb->s_flags & MS_RDONLY) &&
+		    sb->sv_type == FSTYPE_SYSV2 &&
+		    *sb->sv_sb_state == 0x7c269d38 - old_time
+		)  *sb->sv_sb_state = 0x5e72d81a;  /*  Fs_ACTIVE  */
+#endif
+
 		if (sb->sv_convert)
 			time = to_coh_ulong(time);
 		*sb->sv_sb_time = time;
@@ -519,6 +545,17 @@ void sysv_put_super(struct super_block *sb)
 {
 	/* we can assume sysv_write_super() has already been called */
 	lock_super(sb);
+#ifdef CONFIG_BESTA
+	if (!(sb->s_flags & MS_RDONLY) &&
+	    sb->sv_type == FSTYPE_SYSV2 &&
+	    *sb->sv_sb_state == 0x5e72d81a   /*  Fs_ACTIVE  */
+	) {
+	    /*  we assume `sv_sb_time' has never be changed later.  */
+	    *sb->sv_sb_state = 0x7c269d38 - *sb->sv_sb_time;
+
+	    mark_buffer_dirty(sb->sv_bh1, 1);
+	}
+#endif
 	brelse(sb->sv_bh1);
 	if (sb->sv_bh1 != sb->sv_bh2) brelse(sb->sv_bh2);
 	/* switch back to default block size */
@@ -771,14 +808,24 @@ struct buffer_head * sysv_file_bread(struct inode * inode, int block, int create
 
 static inline unsigned long read3byte (char * p)
 {
+#ifndef CONFIG_BESTA
 	return (unsigned long)(*(unsigned short *)p)
 	     | (unsigned long)(*(unsigned char *)(p+2)) << 16;
+#else
+	return (unsigned long)(*(unsigned char *)p) << 16
+	     | (unsigned long)(*(unsigned short *)(p+1));
+#endif
 }
 
 static inline void write3byte (char * p, unsigned long val)
 {
+#ifndef CONFIG_BESTA
 	*(unsigned short *)p = (unsigned short) val;
 	*(unsigned char *)(p+2) = val >> 16;
+#else
+	*(unsigned char *)p = val >> 16;
+	*(unsigned short *)(p+1) = (unsigned short) val;
+#endif
 }
 
 static inline unsigned long coh_read3byte (char * p)
@@ -839,7 +886,12 @@ void sysv_read_inode(struct inode * inode)
 	}
 	inode->i_blocks = inode->i_blksize = 0;
 	if (S_ISCHR(inode->i_mode) || S_ISBLK(inode->i_mode))
+#ifndef CONFIG_BESTA
 		inode->i_rdev = to_kdev_t(raw_inode->i_a.i_rdev);
+#else
+		inode->i_rdev =
+			to_kdev_t(*((short *) &raw_inode->i_a.i_addb[1]));
+#endif
 	else
 	if (sb->sv_convert)
 		for (block = 0; block < 10+1+1+1; block++)
@@ -924,7 +976,12 @@ static struct buffer_head * sysv_update_inode(struct inode * inode)
 		raw_inode->i_ctime = inode->i_ctime;
 	}
 	if (S_ISCHR(inode->i_mode) || S_ISBLK(inode->i_mode))
+#ifndef CONFIG_BESTA
 		raw_inode->i_a.i_rdev = kdev_t_to_nr(inode->i_rdev); /* write 2 or 3 bytes ?? */
+#else
+		*((short *) &raw_inode->i_a.i_addb[1]) =
+					 kdev_t_to_nr(inode->i_rdev);
+#endif
 	else
 	if (sb->sv_convert)
 		for (block = 0; block < 10+1+1+1; block++)
@@ -969,11 +1026,19 @@ int sysv_sync_inode(struct inode * inode)
 
 /* Every kernel module contains stuff like this. */
 
+#ifndef CONFIG_BESTA
 static struct file_system_type sysv_fs_type[3] = {
 	{sysv_read_super, "xenix", 1, NULL},
 	{sysv_read_super, "sysv", 1, NULL},
 	{sysv_read_super, "coherent", 1, NULL}
 };
+#else
+static struct file_system_type sysv_fs_type[3] = {
+	{sysv_read_super, "sysv", 1, NULL},
+	{sysv_read_super, "xenix", 1, NULL},
+	{sysv_read_super, "coherent", 1, NULL}
+};
+#endif
 
 int init_sysv_fs(void)
 {

@@ -224,7 +224,7 @@ int sysv_new_block(struct super_block * sb)
 
 unsigned long sysv_count_free_blocks(struct super_block * sb)
 {
-#if 1 /* test */
+#if 0 /* test */
 	int count, old_count;
 	unsigned int block;
 	struct buffer_head * bh;

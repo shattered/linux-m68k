@@ -507,6 +507,7 @@ void disassociate_ctty(int on_exit)
 			p->tty = NULL;
 }
 
+#ifndef CONFIG_BESTA
 /*
  * Sometimes we want to wait until a particular VT has been activated. We
  * do it in a very simple manner. Everybody waits on a single queue and
@@ -684,6 +685,7 @@ void change_console(unsigned int new_console)
 
 	complete_change_console(new_console);
 }
+#endif  /*  CONFIG_BESTA   */
 
 void wait_for_keypress(void)
 {
@@ -1692,6 +1694,7 @@ static int tty_ioctl(struct inode * inode, struct file * file,
 			arg = get_user((int *) arg);
 			return tty_set_ldisc(tty, arg);
 		case TIOCLINUX:
+#ifndef CONFIG_BESTA
 			if (tty->driver.type != TTY_DRIVER_TYPE_CONSOLE)
 				return -EINVAL;
 			if (current->tty != tty && !suser())
@@ -1755,6 +1758,10 @@ static int tty_ioctl(struct inode * inode, struct file * file,
 				default: 
 					return -EINVAL;
 			}
+#else   /*  CONFIG_BESTA   */
+			return -ENOSYS;
+			break;
+#endif
 
 		case TIOCTTYGSTRUCT:
 			retval = verify_area(VERIFY_WRITE, (void *) arg,
@@ -1989,7 +1996,11 @@ long console_init(long kmem_start, long kmem_end)
 	 * set up the console device so that later boot sequences can 
 	 * inform about problems etc..
 	 */
+#ifndef CONFIG_BESTA
 	return con_init(kmem_start);
+#else
+	return kmem_start;
+#endif
 }
 
 static struct tty_driver dev_tty_driver, dev_console_driver;
@@ -2027,6 +2038,7 @@ int tty_init(void)
 	if (tty_register_driver(&dev_console_driver))
 		panic("Couldn't register /dev/console driver\n");
 	
+#ifndef CONFIG_BESTA
 	kbd_init();
 #if defined(CONFIG_SERIAL) || defined(CONFIG_ATARI_MFPSER) || \
     defined(CONFIG_ATARI_SCC) || defined(CONFIG_ATARI_MIDI) || \
@@ -2057,5 +2069,11 @@ int tty_init(void)
 #endif
 	pty_init();
 	vcs_init();
+
+#else   /*  CONFIG_BESTA   */
+	rs_init();
+	pty_init();
+#endif
+
 	return 0;
 }
