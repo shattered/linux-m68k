@@ -15,6 +15,8 @@
  * dynamic function/string keys, led setting,  Sept 1994
  * `Sticky' modifier keys, 951006.
  * 
+ * Modified to provide 'generic' keyboard support by Hamish Macdonald
+ * Merge with the m68k keyboard driver by Geert Uytterhoeven
  */
 
 #define KEYBOARD_IRQ 1
@@ -37,13 +39,24 @@
 #include "diacr.h"
 #include "vt_kern.h"
 
+#if defined(__i386__) || defined(__alpha__)
+#define TRANSLATE_SCANCODES	1
+#define USE_MACHDEP_ABSTRACTION	0
+#endif /* __i386__ || __alpha__ */
+
+#if defined(__mc68000__)
+#define TRANSLATE_SCANCODES	0
+#define USE_MACHDEP_ABSTRACTION	1
+#include <asm/machdep.h>
+#endif /* __mc68000__ */
+
 /*
- * On non-x86 hardware we do a full keyboard controller
+ * On non-x86 and non-m68k hardware we do a full keyboard controller
  * initialization, in case the bootup software hasn't done
  * it. On a x86, the BIOS will already have initialized the
- * keyboard.
+ * keyboard. On m68k we use the machdep abstraction (hint, hint... ;-)
  */
-#ifndef __i386__
+#if !defined(__i386__) && !USE_MACHDEP_ABSTRACTION
 #define INIT_KBD
 static int initialize_kbd(void);
 #endif
@@ -108,10 +121,12 @@ static struct tty_struct **ttytab;
 static struct kbd_struct * kbd = kbd_table;
 static struct tty_struct * tty = NULL;
 
+#if !USE_MACHDEP_ABSTRACTION
 /* used only by send_data - set by keyboard_interrupt */
 static volatile unsigned char reply_expected = 0;
 static volatile unsigned char acknowledge = 0;
 static volatile unsigned char resend = 0;
+#endif /* !USE_MACHDEP_ABSTRACTION */
 
 extern void compute_shiftstate(void);
 
@@ -157,23 +172,7 @@ static void put_queue(int);
 static unsigned char handle_diacr(unsigned char);
 
 /* pt_regs - set by keyboard_interrupt(), used by show_ptregs() */
-static struct pt_regs * pt_regs;
-
-static inline void kb_wait(void)
-{
-	int i;
-
-	for (i=0; i<0x100000; i++)
-		if ((inb_p(0x64) & 0x02) == 0)
-			return;
-	printk(KERN_WARNING "Keyboard timed out\n");
-}
-
-static inline void send_cmd(unsigned char c)
-{
-	kb_wait();
-	outb(c,0x64);
-}
+struct pt_regs * pt_regs;
 
 /*
  * Many other routines do put_queue, but I think either
@@ -196,6 +195,7 @@ void to_utf8(ushort c) {
        but we need only 16 bits here */
 }
 
+#if TRANSLATE_SCANCODES
 /*
  * Translation of escaped scancodes to keycodes.
  * This is now user-settable.
@@ -330,21 +330,30 @@ int getkeycode(unsigned int scancode)
 	    e0_keys[scancode - 128];
 }
 
-#if DISABLE_KBD_DURING_INTERRUPTS
-#define disable_keyboard()	do { send_cmd(0xAD); kb_wait(); } while (0)
-#define enable_keyboard()	send_cmd(0xAE)
-#else
-#define disable_keyboard()	/* nothing */
-#define enable_keyboard()	/* nothing */
-#endif
+#else /* TRANSLATE_SCANCODES */
 
-static void handle_scancode(unsigned char scancode)
+int setkeycode(unsigned int scancode, unsigned int keycode)
+{
+	return -EOPNOTSUPP;
+}
+
+int getkeycode(unsigned int scancode)
+{
+	return -EOPNOTSUPP;
+}
+
+#endif /* TRANSLATE_SCANCODES */
+
+void handle_scancode(unsigned char scancode)
 {
 	unsigned char keycode;
+#if TRANSLATE_SCANCODES
 	static unsigned int prev_scancode = 0;   /* remember E0, E1 */
+#endif /* TRANSLATE_SCANCODES */
 	char up_flag;				 /* 0 or 0200 */
 	char raw_mode;
 
+#if !USE_MACHDEP_ABSTRACTION
 	if (reply_expected) {
 	  /* 0xfa, 0xfe only mean "acknowledge", "resend" for most keyboards */
 	  /* but they are the key-up scancodes for PF6, PF10 on a FOCUS 9000 */
@@ -370,6 +379,7 @@ static void handle_scancode(unsigned char scancode)
 		prev_scancode = 0;
 		return;
 	}
+#endif /* !USE_MACHDEP_ABSTRACTION */
 	do_poke_blanked_console = 1;
 	mark_bh(CONSOLE_BH);
 	add_keyboard_randomness(scancode);
@@ -383,6 +393,7 @@ static void handle_scancode(unsigned char scancode)
 		   values when finishing RAW mode or when changing VT's */
  	}
 
+#if TRANSLATE_SCANCODES
 	if (scancode == 0xff) {
 	        /* in scancode mode 1, my ESC key generates 0xff */
 		/* the calculator keys on a FOCUS 9000 generate 0xff */
@@ -400,6 +411,7 @@ static void handle_scancode(unsigned char scancode)
 		prev_scancode = scancode;
 		return;
  	}
+#endif /* TRANSLATE_SCANCODES */
 
  	/*
 	 *  Convert scancode to keycode, using prev_scancode.
@@ -407,6 +419,7 @@ static void handle_scancode(unsigned char scancode)
 	up_flag = (scancode & 0200);
  	scancode &= 0x7f;
 
+#if TRANSLATE_SCANCODES
 	if (prev_scancode) {
 	  /*
 	   * usually it will be 0xe0, but a Pause key generates
@@ -479,6 +492,7 @@ static void handle_scancode(unsigned char scancode)
 	      return;
 	  }
  	} else
+#endif /* TRANSLATE_SCANCODES */
 	  keycode = scancode;
 
 	/*
@@ -491,12 +505,14 @@ static void handle_scancode(unsigned char scancode)
 	if (up_flag) {
 		rep = 0;
  		if(!clear_bit(keycode, key_down)) {
+#if !USE_MACHDEP_ABSTRACTION
 		    /* unexpected, but this can happen:
 		       maybe this was a key release for a FOCUS 9000
 		       PF key; if we want to see it, we have to clear
 		       up_flag */
 		    if (keycode >= SC_LIM || keycode == 85)
 		      up_flag = 0;
+#endif /* !USE_MACHDEP_ABSTRACTION */
 		}
 	} else
  		rep = set_bit(keycode, key_down);
@@ -570,6 +586,31 @@ static void handle_scancode(unsigned char scancode)
 	}
 }
 
+#if !USE_MACHDEP_ABSTRACTION
+static inline void kb_wait(void)
+{
+	int i;
+
+	for (i=0; i<0x100000; i++)
+		if ((inb_p(0x64) & 0x02) == 0)
+			return;
+	printk(KERN_WARNING "Keyboard timed out\n");
+}
+
+static inline void send_cmd(unsigned char c)
+{
+	kb_wait();
+	outb(c,0x64);
+}
+
+#if DISABLE_KBD_DURING_INTERRUPTS
+#define disable_keyboard()	do { send_cmd(0xAD); kb_wait(); } while (0)
+#define enable_keyboard()	send_cmd(0xAE)
+#else
+#define disable_keyboard()	/* nothing */
+#define enable_keyboard()	/* nothing */
+#endif
+
 static void keyboard_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 {
 	unsigned char status;
@@ -595,6 +636,38 @@ static void keyboard_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 	mark_bh(KEYBOARD_BH);
 	enable_keyboard();
 }
+
+/*
+ * send_data sends a character to the keyboard and waits
+ * for a acknowledge, possibly retrying if asked to. Returns
+ * the success status.
+ */
+static int send_data(unsigned char data)
+{
+	int retries = 3;
+	int i;
+
+	do {
+		kb_wait();
+		acknowledge = 0;
+		resend = 0;
+		reply_expected = 1;
+		outb_p(data, 0x60);
+		for(i=0; i<0x200000; i++) {
+			extern void allow_interrupts(void);
+			allow_interrupts();
+			inb_p(0x64);		/* just as a delay */
+			if (acknowledge)
+				return 1;
+			if (resend)
+				break;
+		}
+		if (!resend)
+			return 0;
+	} while (retries-- > 0);
+	return 0;
+}
+#endif /* !USE_MACHDEP_ABSTRACTION */
 
 static void put_queue(int ch)
 {
@@ -1062,37 +1135,6 @@ static void do_slock(unsigned char value, char up_flag)
 }
 
 /*
- * send_data sends a character to the keyboard and waits
- * for a acknowledge, possibly retrying if asked to. Returns
- * the success status.
- */
-static int send_data(unsigned char data)
-{
-	int retries = 3;
-	int i;
-
-	do {
-		kb_wait();
-		acknowledge = 0;
-		resend = 0;
-		reply_expected = 1;
-		outb_p(data, 0x60);
-		for(i=0; i<0x200000; i++) {
-			extern void allow_interrupts(void);
-			allow_interrupts();
-			inb_p(0x64);		/* just as a delay */
-			if (acknowledge)
-				return 1;
-			if (resend)
-				break;
-		}
-		if (!resend)
-			return 0;
-	} while (retries-- > 0);
-	return 0;
-}
-
-/*
  * The leds display either (i) the status of NumLock, CapsLock, ScrollLock,
  * or (ii) whatever pattern of lights people want to show using KDSETLED,
  * or (iii) specified bits of specified words in kernel memory.
@@ -1181,8 +1223,13 @@ static void kbd_bh(void)
 
 	if (leds != ledstate) {
 		ledstate = leds;
+#if USE_MACHDEP_ABSTRACTION
+		if (mach_kbd_leds)
+			mach_kbd_leds(leds);
+#else /* USE_MACHDEP_ABSTRACTION */
 		if (!send_data(0xed) || !send_data(leds))
 			send_data(0xf4);	/* re-enable kbd if any errors */
+#endif /* USE_MACHDEP_ABSTRACTION */
 	}
 }
 
@@ -1204,11 +1251,15 @@ int kbd_init(void)
 
 	ttytab = console_driver.table;
 
+#if USE_MACHDEP_ABSTRACTION
+	mach_keyb_init();
+#else /* USE_MACHDEP_ABSTRACTION */
 	request_irq(KEYBOARD_IRQ, keyboard_interrupt, 0, "keyboard", NULL);
 	request_region(0x60,16,"keyboard");
 #ifdef INIT_KBD
 	initialize_kbd();
 #endif
+#endif /* USE_MACHDEP_ABSTRACTION */
 	init_bh(KEYBOARD_BH, kbd_bh);
 	mark_bh(KEYBOARD_BH);
 	return 0;

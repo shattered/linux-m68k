@@ -2028,7 +2028,10 @@ int tty_init(void)
 		panic("Couldn't register /dev/console driver\n");
 	
 	kbd_init();
-#ifdef CONFIG_SERIAL
+#if defined(CONFIG_SERIAL) || defined(CONFIG_ATARI_MFPSER) || \
+    defined(CONFIG_ATARI_SCC) || defined(CONFIG_ATARI_MIDI) || \
+    defined(CONFIG_AMIGA_BUILTIN_SERIAL) || defined(CONFIG_GVIOEXT) || \
+    defined(CONFIG_MULTIFACE_III_TTY) || defined(CONFIG_USERIAL)
 	rs_init();
 #endif
 #ifdef CONFIG_SCC

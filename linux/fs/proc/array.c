@@ -52,6 +52,7 @@
 #include <asm/segment.h>
 #include <asm/pgtable.h>
 #include <asm/io.h>
+#include <asm/shmparam.h>
 
 #define LOAD_INT(x) ((x) >> FSHIFT)
 #define LOAD_FRAC(x) LOAD_INT(((x) & (FIXED_1-1)) * 100)
@@ -68,7 +69,7 @@ static int read_core(struct inode * inode, struct file * file,char * buf, int co
 	int count1;
 	char * pnt;
 	struct user dump;
-#ifdef __i386__
+#if defined (__i386__) || defined (__mc68000__)
 #	define FIRST_MAPPED	PAGE_SIZE	/* we don't have page 0 mapped on x86.. */
 #else
 #	define FIRST_MAPPED	0
@@ -456,6 +457,30 @@ unsigned long get_wchan(struct task_struct *p)
 	    }
 	    return pc;
 	}
+#elif defined(__mc68000__)
+	{
+	    unsigned long fp, pc;
+	    unsigned long stack_page;
+	    int count = 0;
+	    extern int sys_pause (void);
+
+	    stack_page = p->kernel_stack_page;
+	    if (!stack_page)
+		    return 0;
+	    fp = ((struct switch_stack *)p->tss.ksp)->a6;
+	    do {
+		    if (fp < stack_page || fp >= 4088+stack_page)
+			    return 0;
+		    pc = ((unsigned long *)fp)[1];
+		/* FIXME: This depends on the order of these functions. */
+		    if ((pc < (unsigned long) __down
+		         || pc >= (unsigned long) add_timer)
+		        && (pc < (unsigned long) schedule
+			    || pc >= (unsigned long) sys_pause))
+		      return pc;
+		    fp = *(unsigned long *) fp;
+	    } while (count++ < 16);
+	}
 #endif
 	return 0;
 }
@@ -471,12 +496,20 @@ unsigned long get_wchan(struct task_struct *p)
 				 + (long)&((struct pt_regs *)0)->reg)
 # define KSTK_EIP(tsk)	(*(unsigned long *)(tsk->kernel_stack_page + PT_REG(pc)))
 # define KSTK_ESP(tsk)	((tsk) == current ? rdusp() : (tsk)->tss.usp)
+#elif defined(__mc68000__)
+#define	KSTK_EIP(tsk)	\
+    ({			\
+	unsigned long eip = 0;	 \
+ 	if ((tsk)->tss.esp0 > PAGE_SIZE && (tsk)->tss.esp0 < high_memory) \
+	      eip = ((struct pt_regs *) (tsk)->tss.esp0)->pc;	 \
+        eip; })
+#define	KSTK_ESP(tsk)	((tsk) == current ? rdusp() : (tsk)->tss.usp)
 #elif defined(__sparc__)
 # define PT_REG(reg)            (PAGE_SIZE - sizeof(struct pt_regs)     \
                                  + (long)&((struct pt_regs *)0)->reg)
 # define KSTK_EIP(tsk)  (*(unsigned long *)(tsk->kernel_stack_page + PT_REG(pc)))
 # define KSTK_ESP(tsk)  (*(unsigned long *)(tsk->kernel_stack_page + PT_REG(u_regs[UREG_FP])))
-#endif
+#endif /* arch */
 
 /* Gcc optimizes away "strlen(x)" for constant x */
 #define ADDBUF(buffer, string) \
@@ -829,7 +862,7 @@ static int get_statm(int pid, char * buffer)
 				trs += pages;	/* text */
 			else if (vma->vm_flags & VM_GROWSDOWN)
 				drs += pages;	/* stack */
-			else if (vma->vm_end > 0x60000000)
+			else if (vma->vm_end > SHM_RANGE_START)
 				lrs += pages;	/* library */
 			else
 				drs += pages;
@@ -981,6 +1014,12 @@ extern int get_locks_status (char *, char **, off_t, int);
 #ifdef __SMP_PROF__
 extern int get_smp_prof_list(char *);
 #endif
+#ifdef __mc68000__
+extern int get_hardware_list(char *);
+#ifdef CONFIG_ZORRO
+extern int zorro_get_list(char *);
+#endif /* CONFIG_ZORRO */
+#endif /* __mc68000__ */
 
 static int get_root_array(char * page, int type, char **start, off_t offset, int length)
 {
@@ -1054,6 +1093,14 @@ static int get_root_array(char * page, int type, char **start, off_t offset, int
 #endif
 		case PROC_LOCKS:
 			return get_locks_status(page, start, offset, length);
+#ifdef __mc68000__
+		case PROC_HARDWARE:
+			return get_hardware_list(page);
+#ifdef CONFIG_ZORRO
+		case PROC_ZORRO:
+			return zorro_get_list(page);
+#endif /* CONFIG_ZORRO */
+#endif /* __mc68000__ */
 	}
 	return -EBADF;
 }

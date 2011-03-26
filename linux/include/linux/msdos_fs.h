@@ -92,11 +92,22 @@
  * BE = big-endian, c: W = word (16 bits), L = longword (32 bits)
  */
 
+#ifdef __BIG_ENDIAN
+
+#define CF_LE_W(v) ((((v) & 0xff) << 8) | (((v) >> 8) & 0xff))
+#define CF_LE_L(v) (((unsigned)(v)>>24) | (((unsigned)(v)>>8)&0xff00) | \
+		    (((unsigned)(v)<<8)&0xff0000) | ((unsigned)(v)<<24)) 
+#define CT_LE_W(v) CF_LE_W(v)
+#define CT_LE_L(v) CF_LE_L(v)
+
+#else
+
 #define CF_LE_W(v) (v)
 #define CF_LE_L(v) (v)
 #define CT_LE_W(v) (v)
 #define CT_LE_L(v) (v)
 
+#endif
 
 struct fat_boot_sector {
 	__s8	ignored[3];	/* Boot strap short or near jump */

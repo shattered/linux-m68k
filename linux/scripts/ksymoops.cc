@@ -23,6 +23,9 @@
 // command-line argument, and redirect the oops-log into stdin.  Out
 // will come the EIP and call-trace in symbolic form.
 
+// Changed by Andreas Schwab <schwab@issan.informatik.uni-dortmund.de>
+// adapted to Linux/m68k
+
 //////////////////////////////////////////////////////////////////////////////
 
 // BUGS:
@@ -38,6 +41,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <ctype.h>
+#include <a.out.h>
 
 inline int strequ(char const* x, char const* y) { return (::strcmp(x, y) == 0); }
 inline int strnequ(char const* x, char const* y, size_t n) { return (::strncmp(x, y, n) == 0); }
@@ -149,32 +153,34 @@ NameList::decode(unsigned char* code, long eip_addr)
     /* This is a hack to avoid using gcc.  We create an object file by
        concatenating objfile_head, the twenty bytes of code, and
        objfile_tail.  */
-    unsigned char objfile_head[] = {
-	0x07, 0x01, 0x00, 0x00, 0x18, 0x00, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x24, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    static struct exec objfile_head = {
+	OMAGIC, code_size + 4, 0, 0, sizeof (struct nlist) * 3, 0, 0, 0
     };
-    unsigned char objfile_tail[] = {
-	0x00, 0x90, 0x90, 0x90,
-	0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00, 0x13, 0x00, 0x00, 0x00,
-	0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x25, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00, 0x2a, 0x00, 0x00, 0x00,
-	'g',  'c',  'c',  '2',  '_',  'c',  'o',  'm',  
-	'p',  'i',  'l',  'e',  'd',  '.',  '\0', '_',  
-	'E',  'I',  'P',  '\0', '\0', '\0', '\0', '\0',
-	'\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0',
-	'\0', '\0', '\0', '\0', '\0', '\0'
+    static struct {
+	unsigned char tail[4];
+	struct nlist syms[3];
+	unsigned long strsize;
+	char strings[42];
+    } objfile_tail = {
+#ifdef i386
+	{ 0x00, 0x90, 0x90, 0x90 },
+#endif
+#ifdef mc68000
+	{ 0x00, 0x00, 0x00, 0x00 },
+#endif
+	{ { (char *) 4, N_TEXT, 0, 0, 0 },
+	  { (char *) 19, N_TEXT, 0, 0, 0 },
+	  { (char *) 37, N_TEXT | N_EXT, 0, 0, 0 } },
+	42,
+	"gcc2_compiled.\0___gnu_compiled_c\0_EIP\0"
     };
     char const* objdump_command = "objdump -d oops_decode.o";
     char const* objfile_name = &objdump_command[11];
     ofstream objfile_stream(objfile_name);
 
-    objfile_stream.write(objfile_head, sizeof(objfile_head));
+    objfile_stream.write((char *) &objfile_head, sizeof(objfile_head));
     objfile_stream.write(code, code_size);
-    objfile_stream.write(objfile_tail, sizeof(objfile_tail));
+    objfile_stream.write((char *) &objfile_tail, sizeof(objfile_tail));
     objfile_stream.close();
     
     FILE* objdump_FILE = popen(objdump_command, "r");
@@ -202,6 +208,8 @@ NameList::decode(unsigned char* code, long eip_addr)
 	if (!strnequ(&buf[9], "<_EIP", 5))
 	    continue;
 	eip_seen = 1;
+	if (strnequ(buf, "...", 3))
+	    break;
 	if (strstr(buf, " is out of bounds"))
 	    break;
 	lines++;
@@ -229,6 +237,7 @@ NameList::decode(unsigned char* code, long eip_addr)
 	    bp++;
 	while (isspace(*bp))
 	    bp++;
+#ifdef i386
 	if (!isxdigit(*bp)) {
 	    cout << bp_0;
 	} else if (*bp_1 == 'j' || strnequ(bp_1, "call", 4)) { // a jump or call insn
@@ -242,6 +251,23 @@ NameList::decode(unsigned char* code, long eip_addr)
 	} else {
 	    cout << bp_0;
 	}
+#endif
+#ifdef mc68000
+	if ((bp_0[0] == 'b' && bp_0[4] == ' ' && strchr("swl", bp_0[3]))
+	    || (bp_0[0] == 'd' && bp_0[1] == 'b')) {
+	    // a branch or decr-and-branch insn
+	    if (bp_0[0] == 'd') // skip register
+		while (*bp && *bp++ != ',');
+	    long rel_addr = strtoul(bp, 0, 16);
+	    ksym = find(eip_addr + rel_addr);
+	    if (ksym) {
+		*bp++ = '\0';
+		cout << bp_0 << *ksym << endl;
+	    } else
+	      cout << bp_0;
+	} else
+	  cout << bp_0;
+#endif
     }
     if (!lines)
 	clog << "Sorry, your " << objdump_command << " can't disassemble--you must upgrade your binutils." << endl;
@@ -303,6 +329,7 @@ main(int argc, char** argv)
     {
 	long eip_addr;
 	cin >> buffer;
+#ifdef i386
 	if (strequ(buffer, "EIP:") && names.valid()) {
 	    cin >> ::hex >> eip_addr;
 	    cin >> c >> c >> c;
@@ -315,6 +342,19 @@ main(int argc, char** argv)
 	    KSym* ksym = names.find(eip_addr);
 	    if (ksym)
 		cout << ">>EIP: " << *ksym << endl;
+#endif
+#ifdef mc68000
+	if (strequ(buffer, "PC:") && names.valid()) {
+	    cin >> ::hex >> eip_addr;
+	    cin >> buffer;
+	    if (!strequ(buffer, "SR:")) {
+		clog << "Please strip the line-prefixes and rerun " << program_name << endl;
+		exit(1);
+	    }
+	    KSym* ksym = names.find(eip_addr);
+	    if (ksym)
+		cout << ">>PC: " << *ksym << endl;
+#endif
 	} else if (strequ(buffer, "Trace:") && names.valid()) {
 	    long address;
 	    while ((cin >> buffer) && 
@@ -338,6 +378,9 @@ main(int argc, char** argv)
 	    while (cp < end) {
 		int c;
 		cin >> ::hex >> c;
+#ifdef mc68000
+		*cp++ = c >> 8;
+#endif
 		*cp++ = c;
 	    }
 	    names.decode(code, eip_addr);

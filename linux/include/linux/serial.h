@@ -10,6 +10,10 @@
 #ifndef _LINUX_SERIAL_H
 #define _LINUX_SERIAL_H
 
+#ifdef __mc68000__
+#include <asm/serial.h>
+#else
+
 struct serial_struct {
 	int	type;
 	int	line;
@@ -205,4 +209,5 @@ struct rs_multiport_struct {
 extern int register_serial(struct serial_struct *req);
 extern void unregister_serial(int line);
 #endif /* __KERNEL__ */
+#endif /* m68k */
 #endif /* _LINUX_SERIAL_H */

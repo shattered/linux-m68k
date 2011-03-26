@@ -41,6 +41,10 @@
 
 #include "hosts.h"
 
+#if defined(CONFIG_A4000T_SCSI) || defined(CONFIG_WARPENGINE_SCSI) || defined(CONFIG_A4091_SCSI)
+#include "amiga7xx.h"
+#endif
+
 #ifdef CONFIG_A3000_SCSI
 #include "a3000.h"
 #endif
@@ -51,6 +55,26 @@
 
 #ifdef CONFIG_GVP11_SCSI
 #include "gvp11.h"
+#endif
+
+#ifdef CONFIG_CYBERSTORM_SCSI
+#include "cyber_esp.h"
+#endif
+
+#ifdef CONFIG_CYBERSTORMII_SCSI
+#include "cyberII_esp.h"
+#endif
+
+#ifdef CONFIG_BLZ2060_SCSI
+#include "blz2060_esp.h"
+#endif
+
+#ifdef CONFIG_BLZ1230_SCSI
+#include "blz1230_esp.h"
+#endif
+
+#ifdef CONFIG_FASTLANE_SCSI
+#include "fastlane_esp.h"
 #endif
 
 #ifdef CONFIG_ATARI_SCSI
@@ -187,7 +211,7 @@
 
 
 /*
-static const char RCSid[] = "$Header: /usr/src/linux-1.3.95/drivers/scsi/RCS/hosts.c,v 1.7 1996/04/25 22:21:56 root Exp root $";
+static const char RCSid[] = "$Header: /usr/src/cvsroot/linux/drivers/scsi/hosts.c,v 1.1 1996/08/24 12:38:46 root Exp $";
 */
 
 /*
@@ -219,7 +243,9 @@ Scsi_Host_Template * scsi_hosts = NULL;
 
 static Scsi_Host_Template builtin_scsi_hosts[] =
 {
-#ifdef CONFIG_AMIGA
+#if defined(CONFIG_A4000T_SCSI) || defined(CONFIG_WARPENGINE_SCSI) || defined(CONFIG_A4091_SCSI)
+	AMIGA7XX_SCSI,
+#endif
 #ifdef CONFIG_A3000_SCSI
 	A3000_SCSI,
 #endif
@@ -229,12 +255,24 @@ static Scsi_Host_Template builtin_scsi_hosts[] =
 #ifdef CONFIG_GVP11_SCSI
 	GVP11_SCSI,
 #endif
+#ifdef CONFIG_CYBERSTORM_SCSI
+	SCSI_CYBER_ESP,
+#endif
+#ifdef CONFIG_CYBERSTORMII_SCSI
+	SCSI_CYBERII_ESP,
+#endif
+#ifdef CONFIG_BLZ2060_SCSI
+	SCSI_BLZ2060_ESP,
+#endif
+#ifdef CONFIG_BLZ1230_SCSI
+	SCSI_BLZ1230_ESP,
+#endif
+#ifdef CONFIG_FASTLANE_SCSI
+	SCSI_FASTLANE_ESP,
 #endif
 
-#ifdef CONFIG_ATARI
 #ifdef CONFIG_ATARI_SCSI
 	ATARI_SCSI,
-#endif
 #endif
 
 #ifdef CONFIG_SCSI_ADVANSYS

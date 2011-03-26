@@ -4,11 +4,97 @@
  * Copyright (C) 1995 David S. Miller (davem@caip.rutgers.edu)
  */
 
-#ifndef _SPARC_ESP_H
-#define _SPARC_ESP_H
+#ifndef _ESP_H
+#define _ESP_H
 
-/* For dvma controller register definitions. */
-#include <asm/dma.h>
+/* Macros for debugging messages */
+
+/* #define DEBUG_ESP */
+/* #define DEBUG_ESP_DATA */
+/* #define DEBUG_ESP_QUEUE */
+/* #define DEBUG_ESP_DISCONNECT */
+/* #define DEBUG_ESP_STATUS */
+/* #define DEBUG_ESP_PHASES */
+/* #define DEBUG_ESP_WORKBUS */
+/* #define DEBUG_STATE_MACHINE */
+/* #define DEBUG_ESP_CMDS */
+/* #define DEBUG_ESP_IRQS */
+/* #define DEBUG_SDTR */
+/* #define DEBUG_ESP_SG */
+
+/* Use the following to sprinkle debugging messages in a way whic
+ * suits you if combinations of the above become too verbose when
+ * trying to track down a specific problem.
+ */
+/* #define DEBUG_ESP_MISC */
+
+#if defined(DEBUG_ESP)
+#define ESPLOG(foo)  printk foo
+#else
+#define ESPLOG(foo)
+#endif /* (DEBUG_ESP) */
+
+#if defined(DEBUG_ESP_DATA)
+#define ESPDATA(foo)  printk foo
+#else
+#define ESPDATA(foo)
+#endif
+
+#if defined(DEBUG_ESP_QUEUE)
+#define ESPQUEUE(foo)  printk foo
+#else
+#define ESPQUEUE(foo)
+#endif
+
+#if defined(DEBUG_ESP_DISCONNECT)
+#define ESPDISC(foo)  printk foo
+#else
+#define ESPDISC(foo)
+#endif
+
+#if defined(DEBUG_ESP_STATUS)
+#define ESPSTAT(foo)  printk foo
+#else
+#define ESPSTAT(foo)
+#endif
+
+#if defined(DEBUG_ESP_PHASES)
+#define ESPPHASE(foo)  printk foo
+#else
+#define ESPPHASE(foo)
+#endif
+
+#if defined(DEBUG_ESP_WORKBUS)
+#define ESPBUS(foo)  printk foo
+#else
+#define ESPBUS(foo)
+#endif
+
+#if defined(DEBUG_ESP_IRQS)
+#define ESPIRQ(foo)  printk foo
+#else
+#define ESPIRQ(foo)
+#endif
+
+#if defined(DEBUG_SDTR)
+#define ESPSDTR(foo)  printk foo
+#else
+#define ESPSDTR(foo)
+#endif
+
+#if defined(DEBUG_ESP_MISC)
+#define ESPMISC(foo)  printk foo
+#else
+#define ESPMISC(foo)
+#endif
+
+#define INTERNAL_ESP_ERROR \
+        (panic ("Internal ESP driver error in file %s, line %d\n", \
+		__FILE__, __LINE__))
+
+#define INTERNAL_ESP_ERROR_NOPANIC \
+        (printk ("Internal ESP driver error in file %s, line %d\n", \
+		 __FILE__, __LINE__))
 
 /* The ESP SCSI controllers have their register sets in three
  * "classes":
@@ -24,7 +110,7 @@
  * apart with a big-endian ordering to the bytes.
  */
 
-struct Sparc_ESP_regs {
+struct ESP_regs {
                                 /* Access    Description              Offset */
     volatile unchar esp_tclow;  /* rw  Low bits of the transfer count 0x00   */
                                 unchar tlpad1[3];
@@ -68,7 +154,7 @@ struct Sparc_ESP_regs {
 
 /* Various revisions of the ESP board. */
 enum esp_rev {
-  esp100     = 0x00,  /* NCR53C90  */
+  esp100     = 0x00,  /* NCR53C90 - very broken */
   esp100a    = 0x01,  /* NCR53C90A */
   esp236     = 0x02,
   fas236     = 0x03,
@@ -79,16 +165,16 @@ enum esp_rev {
 
 /* We get one of these for each ESP probed. */
 struct Sparc_ESP {
-  struct Sparc_ESP *next;           /* Next ESP on probed or NULL */
-  struct Sparc_ESP_regs *eregs;           /* All esp registers */
-  struct Linux_SBus_DMA *dma;             /* Who I do transfers with. */
-  struct sparc_dma_registers *dregs;      /* And his registers. */
+  struct Sparc_ESP *next;                 /* Next ESP on probed or NULL */
+  struct ESP_regs *eregs;	          /* All esp registers */
+  struct Linux_DMA *dma;                  /* Who I do transfers with. */
+  void *dregs;		  		  /* And his registers. */
   struct Scsi_Host *ehost;                /* Backpointer to SCSI Host */
 
-  struct linux_sbus_device *edev;         /* Pointer to SBus entry */
+  void *edev;        		          /* Pointer to controller base/SBus */
   char prom_name[64];                     /* Name of ESP device from prom */
   int prom_node;                          /* Prom node where ESP found */
-  int esp_id;                             /* Same as esphost->host_id */
+  int esp_id;                             /* Unique per-ESP ID number */
 
   /* ESP Configuration Registers */
   unsigned char config1;                  /* Copy of the 1st config register */
@@ -98,13 +184,17 @@ struct Sparc_ESP {
   /* The current command we are sending to the ESP chip.  This esp_command
    * ptr needs to be mapped in DVMA area so we can send commands and read
    * from the ESP fifo without burning precious CPU cycles.  Programmed I/O
-   * sucks when we have the DVMA to do it for us.
+   * sucks when we have the DVMA to do it for us.  The ESP is stupid and will
+   * only send out 6, 10, and 12 byte SCSI commands, others we need to send
+   * one byte at a time.  esp_slowcmd being set says that we are doing one
+   * of the command types ESP doesn't understand, esp_scmdp keeps track of
+   * which byte we are sending, esp_scmdleft says how many bytes to go.
    */
   volatile unchar *esp_command;           /* Location of command */
-  int esp_clen;                           /* Length of this command */
-
-  /* To hold onto the dvma buffer ptr. */
-  char *dvma_hold;
+  unsigned char esp_clen;                 /* Length of this command */
+  unsigned char esp_slowcmd;
+  unsigned char *esp_scmdp;
+  unsigned char esp_scmdleft;
 
   /* The following are used to determine the cause of an IRQ. Upon every
    * IRQ entry we synchronize these with the hardware registers.
@@ -118,14 +208,34 @@ struct Sparc_ESP {
   unsigned int cfact;                    /* Clock conversion factor */
   unsigned int ccycle;                   /* One ESP clock cycle */
   unsigned int ctick;                    /* One ESP clock time */
-  unsigned int sync_defp;                /* Default negotiation period */
+  unsigned int radelay;                  /* FAST chip req/ack delay */
+  unsigned int neg_defp;                 /* Default negotiation period */
+  unsigned int sync_defp;                /* Default sync transfer period */
+  unsigned int max_period;               /* longest our period can be */
+  unsigned int min_period;               /* shortest period we can withstand */
+  unsigned char ccf;			 /* Clock conversion factor */
+  /* For slow to medium speed input clock rates we shoot for 5mb/s,
+   * but for high input clock rates we try to do 10mb/s although I
+   * don't think a transfer can even run that fast with an ESP even
+   * with DMA2 scatter gather pipelining.
+   */
+#define SYNC_DEFP_SLOW            0x32   /* 5mb/s  */
+#define SYNC_DEFP_FAST            0x19   /* 10mb/s */
+
+  unsigned int snip;                      /* Sync. negotiation in progress */
+  unsigned int targets_present;           /* targets spoken to before */
+
+  int current_transfer_size;              /* Set at beginning of data dma */
+
+  unchar espcmdlog[32];                   /* Log of current esp cmds sent. */
+  unchar espcmdent;                       /* Current entry in esp cmd log. */
 
   /* Misc. info about this ESP */
   enum esp_rev erev;                      /* ESP revision */
   int irq;                                /* SBus IRQ for this ESP */
   int scsi_id;                            /* Who am I as initiator? */
   int scsi_id_mask;                       /* Bitmask of 'me'. */
-  int diff;                               /* Differential SCSI? */
+  int diff;                               /* Differential SCSI bus? */
   int bursts;                             /* Burst sizes our DVMA supports */
 
   /* Our command queues, only one cmd lives in the current_SC queue. */
@@ -137,8 +247,47 @@ struct Sparc_ESP {
   Scsi_Cmnd *eatme_SC;           /* Cmds waiting for esp thread to process. */
 #endif
 
-  /* Abortion status */
-  int aborting, abortion_complete, abort_result;
+  /* Message goo */
+  unchar cur_msgout[16];
+  unchar cur_msgin[16];
+  unchar prevmsgout, prevmsgin;
+  unchar msgout_len, msgin_len;
+  unchar msgout_ctr, msgin_ctr;
+
+  /* States that we cannot keep in the per cmd structure because they
+   * cannot be assosciated with any specific command.
+   */
+  unchar being_reselected;
+  unchar resetting_bus;
+  unchar aborting_cmd;
+  unchar aborting_all;
+
+  unchar do_pio_cmds;		/* Do command transfer with pio */
+
+  /* Functions handling DMA
+   */ 
+  /* Required functions */
+  int  (*dma_bytes_sent)(struct Sparc_ESP *, int);
+  int  (*dma_can_transfer)(struct Sparc_ESP *, Scsi_Cmnd *);
+  void (*dma_dump_state)(struct Sparc_ESP *);
+  void (*dma_init_read)(struct Sparc_ESP *, char *, int);
+  void (*dma_init_write)(struct Sparc_ESP *, char *, int);
+  void (*dma_ints_off)(struct Sparc_ESP *);
+  void (*dma_ints_on)(struct Sparc_ESP *);
+  int  (*dma_irq_p)(struct Sparc_ESP *);
+  int  (*dma_ports_p)(struct Sparc_ESP *);
+  void (*dma_setup)(struct Sparc_ESP *, char *, int, int);
+
+  /* Optional functions (i.e. may be initialized to 0) */
+  void (*dma_barrier)(struct Sparc_ESP *);
+  void (*dma_drain)(struct Sparc_ESP *);
+  void (*dma_invalidate)(struct Sparc_ESP *);
+  void (*dma_irq_entry)(struct Sparc_ESP *);
+  void (*dma_irq_exit)(struct Sparc_ESP *);
+  void (*dma_led_off)(struct Sparc_ESP *);
+  void (*dma_led_on)(struct Sparc_ESP *);
+  void (*dma_poll)(struct Sparc_ESP *, unsigned char *);
+  void (*dma_reset)(struct Sparc_ESP *);
 };
 
 /* Bitfield meanings for the above registers. */
@@ -283,7 +432,12 @@ struct Sparc_ESP {
 #define ESP_STEP_PPC          0x03             /* Early phase chg caused cmnd
                                                 * bytes to be lost
                                                 */
-#define ESP_STEP_FINI         0x04             /* Command was sent ok */
+#define ESP_STEP_FINI4        0x04             /* Command was sent ok */
+
+/* Ho hum, some ESP's set the step register to this as well... */
+#define ESP_STEP_FINI5        0x05
+#define ESP_STEP_FINI6        0x06
+#define ESP_STEP_FINI7        0x07
 
 /* ESP chip-test register read-write */
 #define ESP_TEST_TARG         0x01             /* Target test mode */
@@ -299,6 +453,7 @@ struct Sparc_ESP {
 /* ESP fifo flags register read-only */
 /* Note that the following implies a 16 byte FIFO on the ESP. */
 #define ESP_FF_FBYTES         0x1f             /* Num bytes in FIFO */
+#define ESP_FF_ONOTZERO       0x20             /* offset ctr not zero (esp100) */
 #define ESP_FF_SSTEP          0xe0             /* Sequence step */
 
 /* ESP clock conversion factor register write-only */
@@ -311,40 +466,26 @@ struct Sparc_ESP {
 #define ESP_CCF_F6            0x06             /* 25.01MHz - 30MHz */
 #define ESP_CCF_F7            0x07             /* 30.01MHz - 35MHz */
 
-extern int esp_detect(struct SHT *);
-extern const char *esp_info(struct Scsi_Host *);
-extern int esp_queue(Scsi_Cmnd *, void (*done)(Scsi_Cmnd *));
-extern int esp_command(Scsi_Cmnd *);
-extern int esp_abort(Scsi_Cmnd *);
-extern int esp_reset(Scsi_Cmnd *, unsigned int);
+#define ESP_BUS_TIMEOUT        275             /* In milli-seconds */
+#define ESP_TIMEO_CONST       8192
+#define ESP_NEG_DEFP(mhz, cfact) \
+        ((ESP_BUS_TIMEOUT * ((mhz) / 1000)) / (8192 * (cfact)))
+#define ESP_MHZ_TO_CYCLE(mhertz)  ((1000000000) / ((mhertz) / 1000))
+#define ESP_TICK(ccf, cycle)  ((7682 * (ccf) * (cycle) / 1000))
+
 
 extern struct proc_dir_entry proc_scsi_esp;
 
-#define SCSI_SPARC_ESP {                                                               \
-/* struct SHT *next */                                         NULL,                   \
-/* long *usage_count */                                        NULL,                   \
-/* struct proc_dir_entry *proc_dir */                          &proc_scsi_esp,         \
-/* int (*proc_info)(char *, char **, off_t, int, int, int) */  NULL,                   \
-/* const char *name */                                         "Sun ESP 100/100a/200", \
-/* int detect(struct SHT *) */                                 esp_detect,             \
-/* int release(struct Scsi_Host *) */                          NULL,                   \
-/* const char *info(struct Scsi_Host *) */                     esp_info,               \
-/* int command(Scsi_Cmnd *) */                                 esp_command,            \
-/* int queuecommand(Scsi_Cmnd *, void (*done)(Scsi_Cmnd *)) */ esp_queue,              \
-/* int abort(Scsi_Cmnd *) */                                   esp_abort,              \
-/* int reset(Scsi_Cmnd *, int) */                              esp_reset,              \
-/* int slave_attach(int, int) */                               NULL,                   \
-/* int bios_param(Disk *, kdev_t, int[]) */                    NULL,                   \
-/* int can_queue */                                            10,                     \
-/* int this_id */                                              7,                      \
-/* short unsigned int sg_tablesize */                          SG_ALL,                 \
-/* short cmd_per_lun */                                        1,                      \
-/* unsigned char present */                                    0,                      \
-/* unsigned unchecked_isa_dma:1 */                             0,                      \
-/* unsigned use_clustering:1 */                                DISABLE_CLUSTERING, }
+/* UGLY, UGLY, UGLY! */
+extern int nesps, esps_in_use, esps_running;
 
 /* For our interrupt engine. */
 #define for_each_esp(esp) \
         for((esp) = espchain; (esp); (esp) = (esp)->next)
 
-#endif /* !(_SPARC_ESP_H) */
+
+/* External functions */
+extern struct Sparc_ESP *esp_allocate(Scsi_Host_Template *, void *);
+extern void esp_initialize(struct Sparc_ESP *);
+extern void esp_intr(int, void *, struct pt_regs *);
+#endif /* !(_ESP_H) */

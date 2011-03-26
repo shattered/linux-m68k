@@ -4,6 +4,7 @@
  *  Written 1992,1993 by Werner Almesberger
  */
 
+#include <linux/config.h>
 #include <linux/msdos_fs.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
@@ -295,8 +296,19 @@ int fat_free(struct inode *inode,int skip)
 	}
 	if (last) {
 		fat_bits = MSDOS_SB(inode->i_sb)->fat_bits;
-		fat_access(inode->i_sb,last,fat_bits == 12 ? EOF_FAT12 :
-			   fat_bits == 16 ? EOF_FAT16 : EOF_FAT32);
+		fat_access(inode->i_sb,last,fat_bits ==
+			   /*
+			    * For Atari: The GEMDOS uses 0xffff for a
+			    * end-of-file and I've seen programs that can't
+			    * deal with other values. I don't even know if
+			    * GEMDOS itself could handle EOF's != 0xffff
+			    * correctly in all cases. So better use 0xffff.
+			    */
+#ifdef CONFIG_ATARI
+		    12 ? 0xfff : fat_bits == 16 ? 0xffff : EOF_FAT32);
+#else
+		    12 ? EOF_FAT12 : fat_bits == 16 ? EOF_FAT16 : EOF_FAT32);
+#endif
 	} else {
 		MSDOS_I(inode)->i_start = 0;
 		MSDOS_I(inode)->i_logstart = 0;

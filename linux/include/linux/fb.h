@@ -1,6 +1,8 @@
 #ifndef _LINUX_FB_H
 #define _LINUX_FB_H
 
+#include <asm/types.h>
+
 /* Definitions of frame buffers						*/
 
 /* ioctls
@@ -11,6 +13,9 @@
 #define FBIOGETCMAP		0x4604
 #define FBIOPUTCMAP		0x4605
 #define FBIOPAN_DISPLAY         0x4606
+#define FBIOGET_MONITORSPEC	0x4607
+#define FBIOPUT_MONITORSPEC	0x4608
+#define FBIOSWITCH_MONIBIT	0x4609
 
 #define FB_TYPE_PACKED_PIXELS		0	/* Packed Pixels	*/
 #define FB_TYPE_PLANES			1	/* Non interleaved planes */
@@ -26,22 +31,25 @@
 
 struct fb_fix_screeninfo {
 	char id[16];			/* identification string eg "TT Builtin" */
-	unsigned long smem_start;	/* Start of frame buffer mem */
-	unsigned long smem_len;		/* Length of frame buffer mem */	
-	int type;			/* see FB_TYPE_* 		*/
-	int type_aux;			/* Interleave for interleaved Planes */
-	int visual;			/* see FB_VISUAL_*  		*/ 
-	u_short xpanstep;               /* zero if no hardware panning  */
-        u_short ypanstep;               /* zero if no hardware panning  */
-        u_short ywrapstep;              /* zero if no hardware ywrap    */
-        u_long line_length;             /* length of a line in bytes    */
-        short reserved[9];              /* Reserved for future compatibility */
+	char * smem_start;		/* Start of frame buffer mem */
+	__u32 smem_len;			/* Length of frame buffer mem */	
+	__u32 type;			/* see FB_TYPE_* 		*/
+	__u32 type_aux;			/* Interleave for interleaved Planes */
+	__u32 visual;			/* see FB_VISUAL_*  		*/ 
+	__u16 xpanstep;			/* zero if no hardware panning  */
+        __u16 ypanstep;			/* zero if no hardware panning  */
+        __u16 ywrapstep;		/* zero if no hardware ywrap    */
+        __u32 line_length;		/* length of a line in bytes    */
+	unsigned char *mmio_start;	/* Start of Memory Mapped I/O   */
+	__u32 mmio_len;			/* Length of Memory Mapped I/O  */
+	__u32 accel;			/* Type of acceleration available */
+	__u16 reserved[3];		/* Reserved for future compatibility */
 };
 
 struct fb_bitfield {
-	int offset;			/* beginning of bitfield	*/
-	int length;			/* length of bitfield		*/
-	int msb_right;			/* != 0 : Most significant bit is */ 
+	__u32 offset;			/* beginning of bitfield	*/
+	__u32 length;			/* length of bitfield		*/
+	__u32 msb_right;		/* != 0 : Most significant bit is */ 
 					/* right */ 
 };
 
@@ -58,7 +66,10 @@ struct fb_bitfield {
 #define FB_ACCEL_NONE		0	/* no hardware accelerator	*/
 #define FB_ACCEL_ATARIBLITT	1	/* Atari Blitter		*/
 #define FB_ACCEL_AMIGABLITT	2	/* Amiga Blitter                */
-#define FB_ACCEL_CYBERVISION	3	/* Cybervision64 (S3 Trio64)    */
+#define FB_ACCEL_S3TRIO64	3	/* Cybervision64 (S3 Trio64)    */
+#define FB_ACCEL_NCR77C32BLT	4	/* RetinaZ3 (NCR77C32BLT)       */
+#define FB_ACCEL_S3VIRGE	5	/* Cybervision64/3D (S3 ViRGE)  */
+#define FB_ACCEL_CLGEN		6	/* CirrusLogic BitBLT boards	*/
 
 #define FB_SYNC_HOR_HIGH_ACT	1	/* horizontal sync high active	*/
 #define FB_SYNC_VERT_HIGH_ACT	2	/* vertical sync high active	*/
@@ -76,52 +87,60 @@ struct fb_bitfield {
 #define FB_VMODE_YWRAP		256	/* ywrap instead of panning     */
 #define FB_VMODE_SMOOTH_XPAN	512	/* smooth xpan possible (internally used) */
 #define FB_VMODE_CONUPDATE	512	/* don't update x/yoffset	*/
+#define FB_VMODE_CLOCK_HALVE	1024	/* hint for VGA driver: halve dot clock */
 
 struct fb_var_screeninfo {
-	int xres;			/* visible resolution		*/
-	int yres;
-	int xres_virtual;		/* virtual resolution		*/
-	int yres_virtual;
-	int xoffset;			/* offset from virtual to visible */
-	int yoffset;			/* resolution			*/
+	__u32 xres;			/* visible resolution		*/
+	__u32 yres;
+	__u32 xres_virtual;		/* virtual resolution		*/
+	__u32 yres_virtual;
+	__u32 xoffset;			/* offset from virtual to visible */
+	__u32 yoffset;			/* resolution			*/
 
-	int bits_per_pixel;		/* guess what 			*/
-	int grayscale;			/* != 0 Graylevels instead of colors */
+	__u32 bits_per_pixel;		/* guess what 			*/
+	__u32 grayscale;		/* != 0 Graylevels instead of colors */
 
 	struct fb_bitfield red;		/* bitfield in fb mem if true color, */
 	struct fb_bitfield green;	/* else only length is significant */
 	struct fb_bitfield blue;
 	struct fb_bitfield transp;	/* transparency			*/	
 
-	int nonstd;			/* != 0 Non standard pixel format */
+	__u32 nonstd;			/* != 0 Non standard pixel format */
 
-	int activate;			/* see FB_ACTIVATE_* 		*/
+	__u32 activate;			/* see FB_ACTIVATE_* 		*/
 
-	int height;			/* height of picture in mm    */
-	int width;			/* width of picture in mm     */
+	__u32 height;			/* height of picture in mm    */
+	__u32 width;			/* width of picture in mm     */
 
-	int accel;			/* see FB_ACCEL_*		*/
+	__u32 accel;			/* see FB_ACCEL_*		*/
 
 	/* Timing: All values in pixclocks, except pixclock (of course) */
-	unsigned long pixclock;		/* pixel clock in ps (pico seconds) */
-	unsigned long left_margin;	/* time from sync to picture	*/
-	unsigned long right_margin;	/* time from picture to sync	*/
-	unsigned long upper_margin;	/* time from sync to picture	*/
-	unsigned long lower_margin;
-	unsigned long hsync_len;	/* length of horizontal sync	*/
-	unsigned long vsync_len;	/* length of vertical sync	*/
-	int sync;			/* see FB_SYNC_*		*/
-	int vmode;			/* see FB_VMODE_*		*/
-	int reserved[6];		/* Reserved for future compatibility */
+	__u32 pixclock;			/* pixel clock in ps (pico seconds) */
+	__u32 left_margin;		/* time from sync to picture	*/
+	__u32 right_margin;		/* time from picture to sync	*/
+	__u32 upper_margin;		/* time from sync to picture	*/
+	__u32 lower_margin;
+	__u32 hsync_len;		/* length of horizontal sync	*/
+	__u32 vsync_len;		/* length of vertical sync	*/
+	__u32 sync;			/* see FB_SYNC_*		*/
+	__u32 vmode;			/* see FB_VMODE_*		*/
+	__u32 reserved[6];		/* Reserved for future compatibility */
 };
 
 struct fb_cmap {
-	int start;			/* First entry	*/
-	int len;			/* Number of entries */
-	unsigned short *red;		/* Red values	*/
-	unsigned short *green;
-	unsigned short *blue;
-	unsigned short *transp;		/* transparency, can be NULL */
+	__u32 start;			/* First entry	*/
+	__u32 len;			/* Number of entries */
+	__u16 *red;			/* Red values	*/
+	__u16 *green;
+	__u16 *blue;
+	__u16 *transp;			/* transparency, can be NULL */
+};
+
+struct fb_monitorspec {
+	__u32 hfmin;		/* lowest horizontal frequency in Hz */
+	__u32 hfmax;		/* highest horizontal frequency in Hz */
+	__u32 vfmin;		/* lowest vertical frequency in Hz */
+	__u32 vfmax;		/* highest vertical frequency in Hz */
 };
 
 #ifdef __KERNEL__
@@ -130,20 +149,23 @@ struct fb_cmap {
 
 struct fb_ops {
 	/* get non settable parameters	*/
-	int (*fb_get_fix) (struct fb_fix_screeninfo *, int); 
+	int (*fb_get_fix) (struct fb_fix_screeninfo *, int, int); 
 	/* get settable parameters	*/
-	int (*fb_get_var) (struct fb_var_screeninfo *, int);		
+	int (*fb_get_var) (struct fb_var_screeninfo *, int, int);
 	/* set settable parameters	*/
-	int (*fb_set_var) (struct fb_var_screeninfo *, int);		
+	int (*fb_set_var) (struct fb_var_screeninfo *, int, int);
 	/* get colormap			*/
-	int (*fb_get_cmap) (struct fb_cmap *, int, int);
+	int (*fb_get_cmap) (struct fb_cmap *, int, int, int);
 	/* set colormap			*/
-	int (*fb_set_cmap) (struct fb_cmap *, int, int);
+	int (*fb_set_cmap) (struct fb_cmap *, int, int, int);
 	/* pan display                   */
-        int (*fb_pan_display) (struct fb_var_screeninfo *, int);
+        int (*fb_pan_display) (struct fb_var_screeninfo *, int, int);
         /* perform fb specific ioctl	*/
 	int (*fb_ioctl)(struct inode *, struct file *, unsigned int,
-			unsigned long, int);
+			unsigned long, int, int);
+	/* get monitor specifications */
+	int (*fb_get_monitorspec)(struct fb_monitorspec *, int, int);
+	int (*fb_put_monitorspec)(struct fb_monitorspec *, int, int);
 };
 
 int register_framebuffer(char *, int *, struct fb_ops *, int, 
@@ -231,26 +253,26 @@ struct fb_info {
 
 
 struct fb_fix_cursorinfo {
-	u_short crsr_width;		/* width and height of the cursor in */
-	u_short crsr_height;		/* pixels (zero if no cursor)	*/
-	u_short crsr_xsize;		/* cursor size in display pixels */
-	u_short crsr_ysize;
-	u_short crsr_color1;		/* colormap entry for cursor color1 */
-	u_short crsr_color2;		/* colormap entry for cursor color2 */
+	__u16 crsr_width;		/* width and height of the cursor in */
+	__u16 crsr_height;		/* pixels (zero if no cursor)	*/
+	__u16 crsr_xsize;		/* cursor size in display pixels */
+	__u16 crsr_ysize;
+	__u16 crsr_color1;		/* colormap entry for cursor color1 */
+	__u16 crsr_color2;		/* colormap entry for cursor color2 */
 };
 
 struct fb_var_cursorinfo {
-        u_short width;
-        u_short height;
-        u_short xspot;
-        u_short yspot;
-        u_char data[1];                 /* field with [height][width]        */
+        __u16 width;
+        __u16 height;
+        __u16 xspot;
+        __u16 yspot;
+        __u8 data[1];                 /* field with [height][width]        */
 };
 
 struct fb_cursorstate {
-	short xoffset;
-	short yoffset;
-	u_short mode;
+	__s16 xoffset;
+	__s16 yoffset;
+	__u16 mode;
 };
 
 #define FB_CURSOR_OFF		0
@@ -265,21 +287,21 @@ struct fb_cursorstate {
 #define FB_LINE_FILLED	4
 
 struct fb_line {
-	int start_x;
-	int start_y;
-	int end_x;
-	int end_y;
-	int color;
-	int option;
+	__s32 start_x;
+	__s32 start_y;
+	__s32 end_x;
+	__s32 end_y;
+	__u32 color;
+	__u32 option;
 };
 
 struct fb_move {
-	int src_x;
-	int src_y;
-	int dest_x;
-	int dest_y;
-	int height;
-	int width;
+	__s32 src_x;
+	__s32 src_y;
+	__s32 dest_x;
+	__s32 dest_y;
+	__u32 height;
+	__u32 width;
 };
 
 #endif /* Preliminary */

@@ -688,13 +688,14 @@ extern int brw_page(int, struct page *, kdev_t, int [], int, int);
 
 extern void put_super(kdev_t dev);
 unsigned long generate_cluster(kdev_t dev, int b[], int size);
+unsigned long generate_cluster_swab(kdev_t dev, int b[], int size);
 extern kdev_t ROOT_DEV;
 
 extern void show_buffers(void);
 extern void mount_root(void);
 
 #ifdef CONFIG_BLK_DEV_INITRD
-extern kdev_t real_root_dev;
+extern int real_root_dev;
 extern int change_root(kdev_t new_root_dev,const char *put_old);
 #endif
 

@@ -1,6 +1,26 @@
 #ifndef _M68K_IO_H
 #define _M68K_IO_H
 
+/*
+ * readX/writeX() are used to access memory mapped devices. On some
+ * architectures the memory mapped IO stuff needs to be accessed
+ * differently. On the m68k architecture, we just read/write the
+ * memory location directly.
+ */
+/* ++roman: The assignments to temp. vars avoid that gcc sometimes generates
+ * two accesses to memory, which may be undesireable for some devices.
+ */
+#define readb(addr) \
+    ({ unsigned char __v = (*(volatile unsigned char *) (addr)); __v; })
+#define readw(addr) \
+    ({ unsigned short __v = (*(volatile unsigned short *) (addr)); __v; })
+#define readl(addr) \
+    ({ unsigned int __v = (*(volatile unsigned int *) (addr)); __v; })
+
+#define writeb(b,addr) ((*(volatile unsigned char *) (addr)) = (b))
+#define writew(b,addr) ((*(volatile unsigned short *) (addr)) = (b))
+#define writel(b,addr) ((*(volatile unsigned int *) (addr)) = (b))
+
 static inline unsigned char get_user_byte_io(const char * addr)
 {
 	register unsigned char _v;
@@ -20,6 +40,7 @@ static inline void put_user_byte_io(char val,char *addr)
 }
 #define outb_p(x,addr) put_user_byte_io((x),(char *)(addr))
 #define outb(x,addr) put_user_byte_io((x),(char *)(addr))
+
 
 /*
  * Change virtual addresses to physical addresses and vv.

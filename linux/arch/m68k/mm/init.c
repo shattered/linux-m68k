@@ -16,21 +16,16 @@
 #include <linux/blk.h>
 #endif
 
+#include <asm/setup.h>
 #include <asm/segment.h>
 #include <asm/page.h>
 #include <asm/pgtable.h>
 #include <asm/system.h>
-#include <asm/bootinfo.h>
 #include <asm/machdep.h>
 
 extern void die_if_kernel(char *,struct pt_regs *,long);
 extern void init_kpointer_table(void);
 extern void show_net_buffers(void);
-extern unsigned long mm_phys_to_virt (unsigned long addr);
-extern char *rd_start;
-extern int rd_doload;
-
-unsigned long ramdisk_length;
 
 /*
  * BAD_PAGE is the page that is used for page faults when linux
@@ -94,21 +89,25 @@ void show_mem(void)
 #endif
 }
 
-#if 0 /* The 68030 doesn't care about reserved bits. */
+#ifndef mm_cachebits
 /*
  * Bits to add to page descriptors for "normal" caching mode.
  * For 68020/030 this is 0.
  * For 68040, this is _PAGE_CACHE040 (cachable, copyback)
  */
-unsigned long mm_cachebits;
+unsigned long mm_cachebits = 0;
 #endif
 
 pte_t *kernel_page_table (unsigned long *memavailp)
 {
 	pte_t *ptablep;
 
-	ptablep = (pte_t *)*memavailp;
-	*memavailp += PAGE_SIZE;
+	if (memavailp) {
+		ptablep = (pte_t *)*memavailp;
+		*memavailp += PAGE_SIZE;
+	}
+	else
+		ptablep = (pte_t *)__get_free_page(GFP_KERNEL);
 
 	nocache_page ((unsigned long)ptablep);
 
@@ -122,7 +121,6 @@ static unsigned long map_chunk (unsigned long addr,
 #define ONEMEG	(1024*1024)
 #define L3TREESIZE (256*1024)
 
-	int is040 = m68k_is040or060;
 	static unsigned long mem_mapped = 0;
 	static unsigned long virtaddr = 0;
 	static pte_t *ktablep = NULL;
@@ -158,7 +156,7 @@ static unsigned long map_chunk (unsigned long addr,
 	 * arch/head.S
 	 *
 	 */
-	if (is040 && mem_mapped == 0)
+	if (CPU_IS_040_OR_060 && mem_mapped == 0)
 		ktablep = kpt;
 
 	for (physaddr = addr;
@@ -180,7 +178,7 @@ static unsigned long map_chunk (unsigned long addr,
 			pindex = 0;
 		}
 
-		if (is040) {
+		if (CPU_IS_040_OR_060) {
 			int i;
 			unsigned long ktable;
 
@@ -224,7 +222,8 @@ static unsigned long map_chunk (unsigned long addr,
 			 */
 			for (i = 0; i < 64; i++) {
 				pte_val(ktablep[i]) = physaddr | _PAGE_PRESENT
-					| _PAGE_CACHE040 | _PAGE_GLOBAL040;
+					| _PAGE_CACHE040 | _PAGE_GLOBAL040
+					| _PAGE_ACCESSED;
 				physaddr += PAGE_SIZE;
 			}
 			ktablep += 64;
@@ -235,7 +234,7 @@ static unsigned long map_chunk (unsigned long addr,
 			 * 64 entry section of the page table.
 			 */
 
-			kpointerp[pindex++] = ktable | _PAGE_TABLE;
+			kpointerp[pindex++] = ktable | _PAGE_TABLE | _PAGE_ACCESSED;
 		} else {
 			/*
 			 * 68030, use early termination page descriptors.
@@ -255,16 +254,16 @@ static unsigned long map_chunk (unsigned long addr,
 				
 				tbl = (unsigned long *)get_kpointer_table();
 
-				kpointerp[pindex++] = VTOP(tbl) | _PAGE_TABLE;
+				kpointerp[pindex++] = VTOP(tbl) | _PAGE_TABLE |_PAGE_ACCESSED;
 
 				for (i = 0; i < 64; i++, physaddr += PAGE_SIZE)
-					tbl[i] = physaddr | _PAGE_PRESENT;
+					tbl[i] = physaddr | _PAGE_PRESENT | _PAGE_ACCESSED;
 				
 				/* unmap the zero page */
 				tbl[0] = 0;
 			} else {
 				/* not the first 256K */
-				kpointerp[pindex++] = physaddr | _PAGE_PRESENT;
+				kpointerp[pindex++] = physaddr | _PAGE_PRESENT | _PAGE_ACCESSED;
 #ifdef DEBUG
 				printk ("%lx=%lx ", VTOP(&kpointerp[pindex-1]),
 					kpointerp[pindex-1]);
@@ -306,30 +305,28 @@ unsigned long paging_init(unsigned long start_mem, unsigned long end_mem)
 #endif
 
 	init_kpointer_table();
-#if 0
-	/*
-	 * Setup cache bits
-	 */
-	mm_cachebits = m68k_is040or060 ? _PAGE_CACHE040 : 0;
 
-	/* Initialize protection map.  */
-	protection_map[0] = PAGE_READONLY;
-	protection_map[1] = PAGE_READONLY;
-	protection_map[2] = PAGE_COPY;
-	protection_map[3] = PAGE_COPY;
-	protection_map[4] = PAGE_READONLY;
-	protection_map[5] = PAGE_READONLY;
-	protection_map[6] = PAGE_COPY;
-	protection_map[7] = PAGE_COPY;
-	protection_map[8] = PAGE_READONLY;
-	protection_map[9] = PAGE_READONLY;
-	protection_map[10] = PAGE_SHARED;
-	protection_map[11] = PAGE_SHARED;
-	protection_map[12] = PAGE_READONLY;
-	protection_map[13] = PAGE_READONLY;
-	protection_map[14] = PAGE_SHARED;
-	protection_map[15] = PAGE_SHARED;
+	/* Fix the cache mode in the page descriptors for the 680[46]0.  */
+	if (CPU_IS_040_OR_060) {
+		int i;
+#ifndef mm_cachebits
+		mm_cachebits = _PAGE_CACHE040;
 #endif
+		for (i = 0; i < 16; i++)
+			pgprot_val(protection_map[i]) |= _PAGE_CACHE040;
+	}
+	/* Fix the PAGE_NONE value. */
+	if (CPU_IS_040_OR_060) {
+		/* On the 680[46]0 we can use the _PAGE_SUPER bit.  */
+		pgprot_val(protection_map[0]) |= _PAGE_SUPER;
+		pgprot_val(protection_map[VM_SHARED]) |= _PAGE_SUPER;
+	} else {
+		/* Otherwise we must fake it. */
+		pgprot_val(protection_map[0]) &= ~_PAGE_PRESENT;
+		pgprot_val(protection_map[0]) |= _PAGE_FAKE_SUPER;
+		pgprot_val(protection_map[VM_SHARED]) &= ~_PAGE_PRESENT;
+		pgprot_val(protection_map[VM_SHARED]) |= _PAGE_FAKE_SUPER;
+	}
 
 	/*
 	 * Map the physical memory available into the kernel virtual
@@ -382,29 +379,28 @@ unsigned long paging_init(unsigned long start_mem, unsigned long end_mem)
 #endif
 
 	memset (swapper_pg_dir, 0, sizeof(pgd_t)*PTRS_PER_PGD);
-	task[0]->tss.pagedir_v = (unsigned long *)swapper_pg_dir;
-	task[0]->tss.pagedir_p = VTOP (swapper_pg_dir);
+
+	/* setup CPU root pointer for swapper task */
+	task[0]->tss.crp[0] = 0x80000000 | _PAGE_TABLE;
+	task[0]->tss.crp[1] = VTOP (swapper_pg_dir);
 
 #ifdef DEBUG
 	printk ("task 0 pagedir at %p virt, %#lx phys\n",
-		task[0]->tss.pagedir_v, task[0]->tss.pagedir_p);
+		swapper_pg_dir, task[0]->tss.crp[1]);
 #endif
 
-	/* setup CPU root pointer for swapper task */
-	task[0]->tss.crp[0] = 0x80000000 | _PAGE_SHORT;
-	task[0]->tss.crp[1] = task[0]->tss.pagedir_p;
-
-	if (m68k_is040or060)
-		asm ("movel %0,%/d0\n\t"
-		     ".long 0x4e7b0806" /* movec d0,urp */
-		     : /* no outputs */
-		     : "g" (task[0]->tss.crp[1])
-		     : "d0");
+	if (CPU_IS_040_OR_060)
+		asm __volatile__ ("movel %0,%/d0\n\t"
+				  ".long 0x4e7b0806" /* movec d0,urp */
+				  : /* no outputs */
+				  : "g" (task[0]->tss.crp[1])
+				  : "d0");
 	else
-		asm ("pmove %0@,%/crp"
-		     : /* no outputs */
-		     : "a" (task[0]->tss.crp));
-
+		asm __volatile__ ("movel %0,%/a0\n\t"
+				  ".long 0xf0104c00" /* pmove %/a0@,%/crp */
+				  : /* no outputs */
+				  : "g" (task[0]->tss.crp)
+				  : "a0");
 #ifdef DEBUG
 	printk ("set crp\n");
 #endif
@@ -418,35 +414,7 @@ unsigned long paging_init(unsigned long start_mem, unsigned long end_mem)
 	printk ("before free_area_init\n");
 #endif
 
-#ifdef CONFIG_BLK_DEV_RAM
-#ifndef CONFIG_BLK_DEV_INITRD
-	/*
-	 * Since the initialization of the ramdisk's has been changed
-	 * so it fits the new driver initialization scheme, we have to
-	 * make room for our preloaded image here, instead of doing it
-	 * in rd_init() as we cannot kmalloc() a block large enough
-	 * for the image.
-	 */
-
-	ramdisk_length = boot_info.ramdisk_size * 1024;
-
-	if ((ramdisk_length > 0) && (ROOT_DEV == 0)) {
-	  char *rdp;	     /* current location of ramdisk */
-
-	  rd_start = (char *) start_mem;
-
-	  /* get current address of ramdisk */
-	  rdp = (char *)mm_phys_to_virt (boot_info.ramdisk_addr);
-
-	  /* copy the ram disk image */
-	  memcpy (rd_start, rdp, ramdisk_length);
-	  start_mem += ramdisk_length;
-	  rd_doload = 1;     /* tell rd_load to load this thing */
-	}
-#endif
-#endif
-
-	return free_area_init (start_mem, end_mem);
+	return PAGE_ALIGN(free_area_init (start_mem, end_mem));
 }
 
 void mem_init(unsigned long start_mem, unsigned long end_mem)
@@ -496,9 +464,6 @@ void mem_init(unsigned long start_mem, unsigned long end_mem)
 	}
 	
 #endif
-#ifdef DEBUG
-	printk ("task[0] root table is %p\n", task[0]->tss.pagedir_v);
-#endif
 
 	for (tmp = 0 ; tmp < end_mem ; tmp += PAGE_SIZE) {
 		if (VTOP (tmp) >= mach_max_dma_address)
@@ -512,7 +477,8 @@ void mem_init(unsigned long start_mem, unsigned long end_mem)
 		}
 		mem_map[MAP_NR(tmp)].count = 1;
 #ifdef CONFIG_BLK_DEV_INITRD
-		if (!initrd_start || (tmp < initrd_start || tmp >= initrd_end))
+		if (!initrd_start ||
+		    (tmp < (initrd_start & PAGE_MASK) || tmp >= initrd_end))
 #endif
 			free_page(tmp);
 	}

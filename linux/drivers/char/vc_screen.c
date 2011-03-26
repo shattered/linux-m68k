@@ -30,7 +30,21 @@
 static inline int
 vcs_size(struct inode *inode)
 {
+#if !defined(__mc68000__)
 	int size = video_num_lines * video_num_columns;
+#else
+	unsigned int cons = MINOR(inode->i_rdev) & 127;
+	int size;
+
+	if (cons == 0)
+		cons = fg_console;
+	else
+		cons--;
+	if (!vc_cons_allocated(cons))
+		return -ENXIO;
+
+	size = get_video_num_lines(cons) * get_video_num_columns(cons);
+#endif
 	if (MINOR(inode->i_rdev) & 128)
 		size = 2*size + HEADER_SIZE;
 	return size;
@@ -94,8 +108,13 @@ vcs_read(struct inode *inode, struct file *file, char *buf, int count)
 	} else {
 		if (p < HEADER_SIZE) {
 			char header[HEADER_SIZE];
+#if !defined(__mc68000__)
 			header[0] = (char) video_num_lines;
 			header[1] = (char) video_num_columns;
+#else
+			header[0] = (char) get_video_num_lines(cons);
+			header[1] = (char) get_video_num_columns(cons);
+#endif
 			getconsxy(cons, header+2);
 			while (p < HEADER_SIZE && count-- > 0)
 			    put_user(header[p++], buf++);
@@ -105,8 +124,14 @@ vcs_read(struct inode *inode, struct file *file, char *buf, int count)
 		if ((p & 1) && count-- > 0)
 			put_user(scr_readw(org++) >> 8, buf++);
 		while (count > 1) {
+#if !defined(__mc68000__)
 			put_user(scr_readw(org++), (unsigned short *) buf);
 			buf += 2;
+#else
+			short word = scr_readw(org++);
+			put_user(word & 0xff, buf++);
+			put_user(word >> 8, buf++);
+#endif
 			count -= 2;
 		}
 		if (count > 0)
@@ -169,14 +194,25 @@ vcs_write(struct inode *inode, struct file *file, const char *buf, int count)
 			org++;
 		}
 		while (count > 1) {
+#if !defined(__mc68000__)
 			scr_writew(get_user((const unsigned short *) buf), org++);
 			buf += 2;
+#else
+			short word = get_user(buf++);
+			word |= get_user(buf++) << 8;
+			scr_writew(word, org++);
+#endif
 			count -= 2;
 		}
 		if (count > 0)
 			scr_writew((scr_readw(org) & 0xff00) |
 				   get_user((const unsigned char*)buf++), org);
 	}
+#ifdef __mc68000__
+	if (cons == fg_console)
+		/* Horribly inefficient if count < screen size.  */
+		update_screen(cons);
+#endif
 	written = buf - buf0;
 	file->f_pos += written;
 	return written;

@@ -79,8 +79,12 @@ extern int smc_init( struct device * );
 extern int sparc_lance_probe(struct device *);
 extern int atarilance_probe(struct device *);
 extern int a2065_probe(struct device *);
+extern int apne_probe(struct device *);
 extern int ariadne_probe(struct device *);
+extern int ariadne2_probe(struct device *);
 extern int hydra_probe(struct device *);
+extern int bionet_probe(struct device *);
+extern int pamsnet_probe(struct device *);
 extern int yellowfin_probe(struct device *);
 extern int eepro100_probe(struct device *);
 extern int epic100_probe(struct device *);
@@ -251,11 +255,23 @@ ethif_probe(struct device *dev)
 #ifdef CONFIG_A2065		/* Commodore/Ameristar A2065 Ethernet Board */
 	&& a2065_probe(dev)
 #endif
+#ifdef CONFIG_APNE		/* Amiga 1200 PCMCIA NEx000 Ethernet Board */
+	&& apne_probe(dev)
+#endif
 #ifdef CONFIG_ARIADNE		/* Village Tronic Ariadne Ethernet Board */
 	&& ariadne_probe(dev)
 #endif
+#ifdef CONFIG_ARIADNE2		/* Village Tronic Ariadne II Ethernet Board */
+	&& ariadne2_probe(dev)
+#endif
 #ifdef CONFIG_HYDRA		/* Hydra Systems Amiganet Ethernet board */
 	&& hydra_probe(dev)
+#endif
+#ifdef CONFIG_ATARI_BIONET	/* Atari Bionet Ethernet board */
+	&& bionet_probe(dev)
+#endif
+#ifdef CONFIG_ATARI_PAMSNET	/* Atari PAMsNet Ethernet board */
+	&& pamsnet_probe(dev)
 #endif
 #ifdef CONFIG_SUNLANCE
 	&& sparc_lance_probe(dev)

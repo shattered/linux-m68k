@@ -2,7 +2,7 @@ VERSION = 2
 PATCHLEVEL = 0
 SUBLEVEL = 36
 
-ARCH = i386
+ARCH = m68k
 
 #
 # For SMP kernels, set this. We don't want to have this in the config file

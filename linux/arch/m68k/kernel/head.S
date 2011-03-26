@@ -14,7 +14,7 @@
 ** 94/11/14 Andreas Schwab: put kernel at PAGESIZE
 ** 94/11/18 Andreas Schwab: remove identity mapping of STRAM for Atari
 ** ++ Bjoern & Roman: ATARI-68040 support for the Medusa
-** 96/04/26 G|nther Kelleter: fixed identity mapping for Falcon with
+** 96/04/26 Guenther Kelleter: fixed identity mapping for Falcon with
 ** 			      Magnum- and FX-alternate ram
 **
 ** This file is subject to the terms and conditions of the GNU General Public
@@ -66,9 +66,8 @@
  */
 
 #include <linux/config.h>
-#include <linux/autoconf.h>
 #include <linux/linkage.h>
-#include <asm/bootinfo.h>
+#include <asm/setup.h>
 #include <asm/pgtable.h>
 
 .globl SYMBOL_NAME(kernel_pg_dir), SYMBOL_NAME(kpt)
@@ -198,7 +197,7 @@ ENTRY(_start)
 	btst	#CPUB_68060,%d0
 	jeq	1f
 	/* '060: d6 := BIT0460|BIT060, cache mode 0x60 (no-cache/non-ser) */
-	movel	#D6F_060+_PAGE_NOCACHE,%d6
+	movel	#D6F_060+_PAGE_CACHE040W,%d6
 	jra	2f
 1:	btst	#CPUB_68040,%d0
 	jeq	1f
@@ -320,7 +319,7 @@ ENTRY(_start)
 	lea	%pc@(SYMBOL_NAME(kpt)),%a1
 	movel	%a3,%a1@		/* save address of page table */
 	movel	%a3,%a1
-	addql	#_PAGE_TABLE,%a1	/* descriptor type */
+	addw	#_PAGE_TABLE+_PAGE_ACCESSED,%a1	/* descriptor type */
 	movel	#PAGE_TABLE_SIZE<<2,%d2 /* increment */
 
 2:	movel	%a1,%a0@+
@@ -342,7 +341,7 @@ ENTRY(_start)
 
 	movel	%a3,%a0
 	movel	%d5,%a1
-	addw	#_PAGE_GLOBAL040+_PAGE_CACHE040+_PAGE_PRESENT,%a1
+	addw	#_PAGE_GLOBAL040+_PAGE_CACHE040+_PAGE_PRESENT+_PAGE_ACCESSED,%a1
 	movew	#(PAGE_TABLE_SIZE*TABLENR_4MB)-1,%d1
 	movel	#PAGESIZE,%d2
 1:	movel	%a1,%a0@+
@@ -405,7 +404,7 @@ Lnot040:
 
 	putc('I')
 
-	moveq	#_PAGE_NOCACHE030+_PAGE_PRESENT,%d0
+	movel	#_PAGE_NOCACHE030+_PAGE_PRESENT+_PAGE_ACCESSED,%d0
 	movel	%d0,%a5@(0x40<<2)
 
 	jra	Lmapphys
@@ -432,7 +431,7 @@ Lspami68040:
 	/* initialize the pointer table */
 	movel	%a4,%a0
 	movel	%a3,%a1
-	addql	#_PAGE_TABLE,%a1	/* base descriptor */
+	addw	#_PAGE_TABLE+_PAGE_ACCESSED,%a1	/* base descriptor */
 	movel	#PAGE_TABLE_SIZE<<2,%d2 /* increment */
 	moveq	#TABLENR_16MB-1,%d1
 
@@ -442,7 +441,7 @@ Lspami68040:
 
 	/* ensure that the root table points to the pointer table */
 	movel	%a4,%a0
-	addql	#_PAGE_TABLE,%a0
+	addw	#_PAGE_TABLE+_PAGE_ACCESSED,%a0
 	movel	%a0,%a5@(0x40<<2)
 
 	/*
@@ -450,7 +449,7 @@ Lspami68040:
 	 * descriptor bits include noncachable/serialized and global bits.
 	 */
 	movel	%a3,%a0
-	movew	#_PAGE_GLOBAL040+_PAGE_NOCACHE_S+_PAGE_PRESENT,%a1
+	movew	#_PAGE_GLOBAL040+_PAGE_NOCACHE_S+_PAGE_PRESENT+_PAGE_ACCESSED,%a1
 	movel	#PAGESIZE,%d2
 	movew	#(PAGE_TABLE_SIZE*TABLENR_16MB)-1,%d1
 
@@ -519,7 +518,7 @@ Ltest_berr:
 	/* Let the root table point to the new pointer table */
 	lea	%a4@(PTR_TABLE_SIZE<<2),%a4
 	movel	%a4,%a0
-	addl	#_PAGE_TABLE,%a0
+	addw	#_PAGE_TABLE+_PAGE_ACCESSED,%a0
 	movel	%a0,%a5@(0x7f<<2)       /* 0xFE000000 - 0xFFFFFFFF */
 
 	/* clear lower half of the pointer table (0xfexxxxxx) */
@@ -535,7 +534,7 @@ Ltest_berr:
 	movel	#PAGE_TABLE_SIZE*PAGESIZE,%d1
 	movel	#(PTR_TABLE_SIZE/2)-1,%d2
 	movel	%d3,%d0
-	addl	#_PAGE_PRESENT,%d0
+	orw	#_PAGE_PRESENT+_PAGE_ACCESSED,%d0
 1:	movel	%d0,%a0@+
 	addl	%d1,%d0
 	dbra	%d2,1b
@@ -553,7 +552,7 @@ Lspata68040:
 
 	/* Initialize the upper half of the pointer table (a0 is still valid) */
 	movel	%a3,%a1
-	addql	#_PAGE_TABLE,%a1
+	addw	#_PAGE_TABLE+_PAGE_ACCESSED,%a1
 	movel	#PAGE_TABLE_SIZE<<2,%d2
 	moveq	#TABLENR_16MB-1,%d1
 1:	movel	%a1,%a0@+
@@ -563,7 +562,7 @@ Lspata68040:
 	/* Initialize the page tables as noncacheable/serialized! */
 	movel	%a3,%a0
 	movel	%d3,%a1
-	addw	#_PAGE_GLOBAL040+_PAGE_NOCACHE_S+_PAGE_PRESENT,%a1
+	addw	#_PAGE_GLOBAL040+_PAGE_NOCACHE_S+_PAGE_PRESENT+_PAGE_ACCESSED,%a1
 	movel	#PAGESIZE,%d2
 	movew	#(PAGE_TABLE_SIZE*TABLENR_16MB)-1,%d1
 1:	movel	%a1,%a0@+
@@ -605,8 +604,10 @@ Lmapphys:
  * will overlap later virtual location, but as we already mapped the first
  * 16MB to 0x80000000, we can jump there after translation and MMU is enabled
  * and then we can switch off translation and go to the final place.
+ * On 020/030 we must emulate transparant translation, since 020 doesn't know
+ * it, but due to early termination pointer this is easy to do.
  * When MMU is enabled, stack pointer and Lcustom will become again valid and
- * points to the unused first page.
+ * stack points to the unused first page.
  */
 
 /*
@@ -623,15 +624,16 @@ Lmapphys:
 
 	is_040_or_060(Lamimmu68040)
 
-	lea	2f:w,%a0
+	moveq	#ROOT_INDEX_SHIFT,%d2
 	movel	%d5,%d0
-	andl	#0xff000000,%d0
-	jne	1f
-	lea	%pc@(2f+0x80000000),%a0
-1:	orw	#TTR_ENABLE+TTR_CI+TTR_RWM+TTR_FCB2+TTR_FCM1+TTR_FCM0,%d0
+	lsrl	%d2,%d0
+	movel	%d0,%d1
+	lsll	%d2,%d1
+	orw	#_PAGE_PRESENT+_PAGE_ACCESSED,%d1
+	lsll	#2,%d0
+	movel	%a5@(%d0:w),%d2
+	movel	%d1,%a5@(%d0:w)
 	lea	%pc@(Lmmu),%a3
-	movel	%d0,%a3@
-	.long	0xf0130800	/* pmove %a3@,%tt0 */
 	/* no limit, 4byte descriptors */
 	movel	#0x80000002,%a3@
 	movel	%a5,%a3@(4)
@@ -644,9 +646,12 @@ Lmapphys:
 	 */
 	movel	#0x82c07760,%a3@
 	.long	0xf0134000	/* pmove %a3@,%tc (enable the MMU) */
-	jmp	%a0@
-2:	clrl	%a3@
-	.long	0xf0130800	/* pmove %a3@,%tt0 */
+	tstl	%d0
+	jne	1f
+	jmp	%pc@(2f+0x80000000)
+1:	jmp	2f:w
+2:	movel	%d2,%a5@(%d0:w)
+	.long	0xf0002400	/* pflusha */
 	jmp	LdoneMMUenable:w
 
 Lamimmu68040:
@@ -709,7 +714,7 @@ Lmapphysnotamiga:
 	 * Requires that this code until after MMU enabling lies in
 	 * the 256K page around %d5
 	 */
-2:	movel	%a4@,%d1
+2:	movel	%a5@,%d1
 	andw	#0xfff0,%d1
 	movel	%d1,%a1
 	movel	%d5,%d1
@@ -717,7 +722,7 @@ Lmapphysnotamiga:
 	lsrl	%d0,%d1
 	lea	%a1@(%d1:l:4),%a1
 	movel	%d5,%d1
-	addql	#_PAGE_PRESENT,%d1
+	orw	#_PAGE_PRESENT+_PAGE_ACCESSED,%d1
 	movel	%a1@,%d2
 	movel	%d1,%a1@
 	lea	5f:w,%a0
@@ -749,7 +754,8 @@ Latarimmu68040:
 	andl	#0xff000000,%d0 /* logical address base */
 	orw	#TTR_ENABLE+TTR_KERNELMODE+_PAGE_NOCACHE_S,%d0
 	.long	0x4e7b0004	/* movec %d0,%itt0 */
-2:	.word	0xf518		/* pflusha */
+2:	nop
+	.word	0xf518		/* pflusha */
 	.long	0x4e7bd807	/* movec %a5,%srp */
 	.long	0x4e7bd806	/* movec %a5,%urp */
 	movel	#TC_ENABLE+TC_PAGE4K,%d0
@@ -1097,7 +1103,7 @@ Lshowtest:
 	putc('=')
 	putn(%a1)
 
-	ptestr	#5,%a1@,#7,%a0
+	.long	0xf0119f15		| ptestr	#5,%a1@,#7,%a0
 
 	putc('D')
 	putc('A')
@@ -1111,7 +1117,7 @@ Lshowtest:
 	putc('S')
 	putc('=')
 	lea	%pc@(Lmmu),%a0
-	pmove	%psr,%a0@
+	.long	0xf0106200		| pmove		%psr,%a0@
 	clrl	%d7
 	movew	%a0@,%d7
 	jbsr	Lserial_putnum

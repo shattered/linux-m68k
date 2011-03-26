@@ -42,6 +42,9 @@
 #ifdef CONFIG_CDU31A
 extern int cdu31a_init(void);
 #endif CONFIG_CDU31A
+#ifdef CONFIG_ATARI_ACSI
+extern int acsi_init(void);
+#endif CONFIG_ATARI_ACSI
 #ifdef CONFIG_MCD
 extern int mcd_init(void);
 #endif CONFIG_MCD
@@ -87,6 +90,9 @@ extern int loop_init(void);
 #ifdef CONFIG_BLK_DEV_MD
 extern int md_init(void);
 #endif CONFIG_BLK_DEV_MD
+#ifdef CONFIG_AMIGA_Z2RAM
+extern int z2_init(void);
+#endif
 
 extern void set_device_ro(kdev_t dev,int flag);
 void add_blkdev_randomness(int major);
@@ -136,6 +142,15 @@ void initrd_init(void);
 #define DEVICE_ON(device) 
 #define DEVICE_OFF(device)
 #define DEVICE_NO_RANDOM
+
+#elif (MAJOR_NR == Z2RAM_MAJOR)
+
+/* Zorro II Ram */
+#define DEVICE_NAME "Z2RAM"
+#define DEVICE_REQUEST do_z2_request
+#define DEVICE_NR(device) (MINOR(device))
+#define DEVICE_ON(device)
+#define DEVICE_OFF(device)
 
 #elif (MAJOR_NR == FLOPPY_MAJOR)
 
@@ -209,6 +224,15 @@ static void floppy_off(unsigned int nr);
 #define DEVICE_NAME "CDU31A"
 #define DEVICE_REQUEST do_cdu31a_request
 #define DEVICE_NR(device) (MINOR(device))
+#define DEVICE_ON(device)
+#define DEVICE_OFF(device)
+
+#elif (MAJOR_NR == ACSI_MAJOR) && (defined(CONFIG_ATARI_ACSI) || defined(CONFIG_ATARI_ACSI_MODULE))
+
+#define DEVICE_NAME "ACSI"
+#define DEVICE_INTR do_acsi
+#define DEVICE_REQUEST do_acsi_request
+#define DEVICE_NR(device) (MINOR(device) >> 4)
 #define DEVICE_ON(device)
 #define DEVICE_OFF(device)
 

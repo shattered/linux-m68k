@@ -20,10 +20,10 @@
 #include <linux/mm.h>
 #include <linux/random.h>
 
+#include <asm/setup.h>
 #include <asm/atarikb.h>
 #include <asm/atari_mouse.h>
 #include <asm/segment.h>
-#include <asm/bootinfo.h>
 
 static struct mouse_status mouse;
 static int atari_mouse_x_threshold = 2, atari_mouse_y_threshold = 2;
@@ -199,7 +199,7 @@ void atari_mouse_setup( char *str, int *ints )
 }
 
 #ifdef MODULE
-#include <asm/bootinfo.h>
+#include <asm/setup.h>
 
 int init_module(void)
 {

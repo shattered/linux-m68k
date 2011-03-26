@@ -4,6 +4,7 @@
  *  Written 1992,1993 by Werner Almesberger
  */
 
+#include <linux/config.h>
 #include <linux/fs.h>
 #include <linux/msdos_fs.h>
 #include <linux/sched.h>
@@ -173,8 +174,19 @@ printk("free cluster: %d\n",nr);
 		unlock_fat(sb);
 		return -ENOSPC;
 	}
-	fat_access(sb,nr,MSDOS_SB(sb)->fat_bits == 12 ? EOF_FAT12 :
-		   MSDOS_SB(sb)->fat_bits == 16 ? EOF_FAT16 : EOF_FAT32);
+	fat_access(sb,nr,MSDOS_SB(sb)->fat_bits == 12 ?
+		   /*
+		    * For Atari: The GEMDOS uses 0xffff for a
+		    * end-of-file and I've seen programs that can't
+		    * deal with other values. I don't even know if
+		    * GEMDOS itself could handle EOF's != 0xffff
+		    * correctly in all cases. So better use 0xffff.
+		    */
+#ifdef CONFIG_ATARI
+	    0xfff : MSDOS_SB(sb)->fat_bits == 16 ? 0xffff : EOF_FAT32);
+#else
+	    EOF_FAT12 : MSDOS_SB(sb)->fat_bits == 16 ? EOF_FAT16 : EOF_FAT32);
+#endif
 	if (MSDOS_SB(sb)->free_clusters != -1) {
 		MSDOS_SB(sb)->free_clusters--;
 	}

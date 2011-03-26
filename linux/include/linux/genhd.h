@@ -11,7 +11,9 @@
 
 #include <linux/config.h>
 
+#if !defined (__mc68000__)
 #define CONFIG_MSDOS_PARTITION 1
+#endif
 
 #ifdef __alpha__
 #define CONFIG_OSF_PARTITION 1
@@ -19,6 +21,14 @@
 
 #if defined(__sparc__) || defined(CONFIG_SMD_DISKLABEL)
 #define CONFIG_SUN_PARTITION 1
+#endif
+
+#if defined(CONFIG_AMIGA) && !defined(CONFIG_AMIGA_PARTITION)
+#define CONFIG_AMIGA_PARTITION 1
+#endif
+
+#if defined(CONFIG_ATARI) && !defined(CONFIG_ATARI_PARTITION)
+#define CONFIG_ATARI_PARTITION 1
 #endif
 
 /* These three have identical behaviour; use the second one if DOS fdisk gets

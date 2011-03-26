@@ -43,7 +43,9 @@ enum root_directory_inos {
 	PROC_MTAB,
 	PROC_MD,
 	PROC_RTC,
-	PROC_LOCKS
+	PROC_LOCKS,
+	PROC_HARDWARE,
+	PROC_ZORRO
 };
 
 enum pid_directory_inos {
@@ -144,6 +146,7 @@ enum scsi_directory_inos {
 	PROC_SCSI_MEGARAID,
 	PROC_SCSI_PPA,
 	PROC_SCSI_ESP,
+	PROC_SCSI_AMIGA7XX,
 	PROC_SCSI_A3000,
 	PROC_SCSI_A2091,
 	PROC_SCSI_GVP11,

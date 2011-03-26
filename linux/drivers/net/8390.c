@@ -40,6 +40,7 @@
 static const char *version =
     "8390.c:v1.10 9/23/94 Donald Becker (becker@cesdis.gsfc.nasa.gov)\n";
 
+#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
@@ -51,6 +52,7 @@ static const char *version =
 #include <asm/segment.h>
 #include <asm/bitops.h>
 #include <asm/io.h>
+#include <asm/irq.h>
 #include <linux/errno.h>
 #include <linux/fcntl.h>
 #include <linux/in.h>
@@ -121,6 +123,7 @@ int ei_open(struct device *dev)
     NS8390_init(dev, 1);
     dev->start = 1;
     ei_local->irqlock = 0;
+    MOD_INC_USE_COUNT;
     return 0;
 }
 
@@ -129,6 +132,7 @@ int ei_close(struct device *dev)
 {
     NS8390_init(dev, 0);
     dev->start = 0;
+    MOD_DEC_USE_COUNT;
     return 0;
 }
 
@@ -284,7 +288,7 @@ static int ei_start_xmit(struct sk_buff *skb, struct device *dev)
    Handle the ether interface interrupts. */
 void ei_interrupt(int irq, void *dev_id, struct pt_regs * regs)
 {
-    struct device *dev = (struct device *)(irq2dev_map[irq]);
+    struct device *dev = (struct device *)(irq2dev_map[IRQ_IDX(irq)]);
     int e8390_base;
     int interrupts, nr_serviced = 0;
     struct ei_device *ei_local;
@@ -295,11 +299,12 @@ void ei_interrupt(int irq, void *dev_id, struct pt_regs * regs)
     }
     e8390_base = dev->base_addr;
     ei_local = (struct ei_device *) dev->priv;
-    if (dev->interrupt || ei_local->irqlock) {
+    if (ei_local->irqlock)
+	/* We assume a shared interrupt */
+	return;
+    if (dev->interrupt) {
 		/* The "irqlock" check is only for testing. */
-		printk(ei_local->irqlock
-			   ? "%s: Interrupted while interrupts are masked! isr=%#2x imr=%#2x.\n"
-			   : "%s: Reentering the interrupt handler! isr=%#2x imr=%#2x.\n",
+		printk("%s: Reentering the interrupt handler! isr=%#2x imr=%#2x.\n",
 			   dev->name, inb_p(e8390_base + EN0_ISR),
 			   inb_p(e8390_base + EN0_IMR));
 		return;
@@ -376,9 +381,9 @@ void ei_interrupt(int irq, void *dev_id, struct pt_regs * regs)
 static void ei_tx_err(struct device *dev)
 {
     int e8390_base = dev->base_addr;
+    struct ei_device *ei_local = (struct ei_device *) dev->priv;
     unsigned char txsr = inb_p(e8390_base+EN0_TSR);
     unsigned char tx_was_aborted = txsr & (ENTSR_ABT+ENTSR_FU);
-    struct ei_device *ei_local = (struct ei_device *) dev->priv;
 
 #ifdef VERBOSE_ERROR_DUMP
     printk(KERN_DEBUG "%s: transmitter error (%#2x): ", dev->name, txsr);
@@ -414,8 +419,8 @@ static void ei_tx_err(struct device *dev)
 static void ei_tx_intr(struct device *dev)
 {
     int e8390_base = dev->base_addr;
-    int status = inb(e8390_base + EN0_TSR);
     struct ei_device *ei_local = (struct ei_device *) dev->priv;
+    int status = inb(e8390_base + EN0_TSR);
     
     outb_p(ENISR_TX, e8390_base + EN0_ISR); /* Ack intr. */
 
@@ -520,6 +525,11 @@ static void ei_receive(struct device *dev)
 		current_offset = this_frame << 8;
 		ei_get_8390_hdr(dev, &rx_frame, this_frame);
 		
+#if 0
+		printk("RXF: status=%d, next=%d, count=%d\n",
+			rx_frame.status, rx_frame.next, rx_frame.count);
+#endif
+
 		pkt_len = rx_frame.count - sizeof(struct e8390_pkt_hdr);
 		
 		next_frame = this_frame + 1 + ((pkt_len+4)>>8);
@@ -558,6 +568,18 @@ static void ei_receive(struct device *dev)
 				skb->dev = dev;
 				skb_put(skb, pkt_len);	/* Make room */
 				ei_block_input(dev, pkt_len, skb, current_offset + sizeof(rx_frame));
+#if 0
+				{
+					int z=0;
+					while(z<skb->len)
+					{
+						printk("%X."(unsigned int)skb->data[z]);
+						if(z%24==0)
+							printk("\n");
+						z++;
+					}
+				}
+#endif
 				skb->protocol=eth_type_trans(skb,dev);
 				netif_rx(skb);
 				ei_local->stat.rx_packets++;
@@ -663,7 +685,7 @@ static void ei_rx_overrun(struct device *dev)
 
 static struct enet_statistics *get_stats(struct device *dev)
 {
-    short ioaddr = dev->base_addr;
+    int ioaddr = dev->base_addr;
     struct ei_device *ei_local = (struct ei_device *) dev->priv;
     
     /* If the card is stopped, just return the present stats. */
@@ -683,7 +705,8 @@ static struct enet_statistics *get_stats(struct device *dev)
  
 static void set_multicast_list(struct device *dev)
 {
-	short ioaddr = dev->base_addr;
+	struct ei_device *ei_local = (struct ei_device *) dev->priv;
+	int ioaddr = dev->base_addr;
     
 	if(dev->flags&IFF_PROMISC)
 	{
@@ -735,8 +758,10 @@ void NS8390_init(struct device *dev, int startp)
     int endcfg = ei_local->word16 ? (0x48 | ENDCFG_WTS) : 0x48;
     unsigned long flags;
     
+    if(sizeof(struct e8390_pkt_hdr)!=4)
+       panic("8390.c: header struct mispacked\n");
     /* Follow National Semi's recommendations for initing the DP83902. */
-    outb_p(E8390_NODMA+E8390_PAGE0+E8390_STOP, e8390_base); /* 0x21 */
+    outb_p(E8390_NODMA+E8390_PAGE0+E8390_STOP, e8390_base+E8390_CMD); /* 0x21 */
     outb_p(endcfg, e8390_base + EN0_DCFG);	/* 0x48 or 0x49 */
     /* Clear the remote byte count registers. */
     outb_p(0x00,  e8390_base + EN0_RCNTLO);
@@ -759,9 +784,11 @@ void NS8390_init(struct device *dev, int startp)
        and set the multicast hash bitmap to receive all multicasts. */
     save_flags(flags);
     cli();
-    outb_p(E8390_NODMA + E8390_PAGE1 + E8390_STOP, e8390_base); /* 0x61 */
+    outb_p(E8390_NODMA + E8390_PAGE1 + E8390_STOP, e8390_base+E8390_CMD); /* 0x61 */
     for(i = 0; i < 6; i++) {
-		outb_p(dev->dev_addr[i], e8390_base + EN1_PHYS + i);
+		outb_p(dev->dev_addr[i], e8390_base + EN1_PHYS_SHIFT(i));
+		if(inb_p(e8390_base + EN1_PHYS_SHIFT(i))!=dev->dev_addr[i])
+			printk("Read/write mismap %d\n",i);
     }
     /* Initialize the multicast list to accept-all.  If we enable multicast
        the higher levels can do the filtering. */
@@ -769,7 +796,7 @@ void NS8390_init(struct device *dev, int startp)
 		outb_p(0xff, e8390_base + EN1_MULT + i);
     
     outb_p(ei_local->rx_start_page,	 e8390_base + EN1_CURPAG);
-    outb_p(E8390_NODMA+E8390_PAGE0+E8390_STOP, e8390_base);
+    outb_p(E8390_NODMA+E8390_PAGE0+E8390_STOP, e8390_base+E8390_CMD);
     restore_flags(flags);
     dev->tbusy = 0;
     dev->interrupt = 0;
@@ -778,7 +805,7 @@ void NS8390_init(struct device *dev, int startp)
     if (startp) {
 		outb_p(0xff,  e8390_base + EN0_ISR);
 		outb_p(ENISR_ALL,  e8390_base + EN0_IMR);
-		outb_p(E8390_NODMA+E8390_PAGE0+E8390_START, e8390_base);
+		outb_p(E8390_NODMA+E8390_PAGE0+E8390_START, e8390_base+E8390_CMD);
 		outb_p(E8390_TXCONFIG, e8390_base + EN0_TXCR); /* xmit on. */
 		/* 3c503 TechMan says rxconfig only after the NIC is started. */
 		outb_p(E8390_RXCONFIG,	e8390_base + EN0_RXCR); /* rx on,  */
@@ -792,9 +819,10 @@ void NS8390_init(struct device *dev, int startp)
 static void NS8390_trigger_send(struct device *dev, unsigned int length,
 								int start_page)
 {
+    struct ei_device *ei_local = (struct ei_device *) dev->priv;
     int e8390_base = dev->base_addr;
     
-    outb_p(E8390_NODMA+E8390_PAGE0, e8390_base);
+    outb_p(E8390_NODMA+E8390_PAGE0, e8390_base+E8390_CMD);
     
     if (inb_p(e8390_base) & E8390_TRANS) {
 		printk("%s: trigger_send() called with the transmitter busy.\n",
@@ -804,7 +832,7 @@ static void NS8390_trigger_send(struct device *dev, unsigned int length,
     outb_p(length & 0xff, e8390_base + EN0_TCNTLO);
     outb_p(length >> 8, e8390_base + EN0_TCNTHI);
     outb_p(start_page, e8390_base + EN0_TPSR);
-    outb_p(E8390_NODMA+E8390_TRANS+E8390_START, e8390_base);
+    outb_p(E8390_NODMA+E8390_TRANS+E8390_START, e8390_base+E8390_CMD);
     return;
 }
 

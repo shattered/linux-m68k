@@ -64,12 +64,7 @@ void umsdos_manglename (struct umsdos_info *info)
 			 ever think of using such a name in real life. This is not
 			 fool proof. I don't think there is a total solution to this.
 		*/
-		union {
-			int entry_num;
-			struct {
-				unsigned num1:5,num2:5,num3:5;
-			}num;
-		} u;
+		int entry_num;
 		char *pt = info->fake.fname + info->fake.len;
 		/* lookup for encoding the last character of the extension */
 		/* It contain valid character after the ugly one to make sure */
@@ -84,16 +79,16 @@ void umsdos_manglename (struct umsdos_info *info)
 			'p','q','r','s','t','u','v' 
 		};
 		#define lookup12 (lookup3+9)
-		u.entry_num = info->f_pos / UMSDOS_REC_SIZE;
-		if (u.entry_num > (9* 32 * 32)){
+		entry_num = info->f_pos / UMSDOS_REC_SIZE;
+		if (entry_num > (9* 32 * 32)){
 			printk ("UMSDOS: More than 9216 file in a directory.\n"
 				"This may break the mangling strategy.\n"
 				"Not a killer problem. See doc.\n");
 		}
 		*pt++ = '.';
-		*pt++ = lookup3 [u.num.num3];
-		*pt++ = lookup12[u.num.num2];
-		*pt++ = lookup12[u.num.num1];
+		*pt++ = lookup3 [(entry_num >> 10) & 31];
+		*pt++ = lookup12[(entry_num >> 5) & 31];
+		*pt++ = lookup12[entry_num & 31];
 		*pt = '\0';		/* help doing printk */	
 		info->fake.len += 4;
 		info->msdos_reject = 0;		/* Avoid mangling twice */
@@ -171,7 +166,7 @@ int umsdos_parse (
 				like this.
 			*/
 			int i;
-			static const char *spc = "\"*+,/:;<=>?[\\]|~";
+			const char *spc = "\"*+,/:;<=>?[\\]|~";
 			is_init = 1;
 			for (i=0; i<=32; i++) lkp[i] = '#';
 			for (i=33; i<'A'; i++) lkp[i] = (char)i;

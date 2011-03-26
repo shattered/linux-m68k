@@ -21,12 +21,12 @@ for more details.
 #include <linux/errno.h>
 #include <linux/mm.h>
 
+#include <asm/setup.h>
 #include <asm/atarihw.h>
 #include <asm/system.h>
 #include <asm/irq.h>
 #include <asm/pgtable.h>
 #include <asm/atariints.h>
-#include <asm/bootinfo.h>
 
 
 /*
@@ -118,10 +118,10 @@ void atari_mksound (unsigned int count, unsigned int ticks)
 	}
 	else {
 
-		/* convert from PC counter value (base frequency 1.193 MHz)
+		/* convert from frequency value
 		 * to PSG period value (base frequency 125 kHz).
 		 */
-		int period = (PSG_FREQ * count + PC_FREQ/2) / PC_FREQ;
+		int period = PSG_FREQ / count;
 
 		if (period > 0xfff) period = 0xfff;
 

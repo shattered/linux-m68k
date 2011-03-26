@@ -45,6 +45,9 @@ if [ "$CONFIG_NLS" = "y" -o "$CONFIG_NLS" = "m" ]; then
   dep_tristate 'NLS ISO 8859-8'    CONFIG_NLS_ISO8859_8    $CONFIG_NLS
   dep_tristate 'NLS ISO 8859-9'    CONFIG_NLS_ISO8859_9    $CONFIG_NLS
   dep_tristate 'NLS KOI8-R'        CONFIG_NLS_KOI8_R       $CONFIG_NLS
+  if [ "$ARCH" = "m68k" ]; then
+    bool 'MSDOS partition support' CONFIG_MSDOS_PARTITION
+  fi
 fi
 
 bool '/proc filesystem support' CONFIG_PROC_FS
@@ -70,11 +73,9 @@ tristate 'System V and Coherent filesystem support' CONFIG_SYSV_FS
 if [ "$CONFIG_EXPERIMENTAL" = "y" ]; then
   tristate 'Kernel automounter support (experimental)' CONFIG_AUTOFS_FS
 fi
-if [ "$CONFIG_EXPERIMENTAL" = "y" ]; then
-  tristate 'Amiga FFS filesystem support (EXPERIMENTAL)' CONFIG_AFFS_FS
-  if [ "$CONFIG_AFFS_FS" != "n" ]; then
-    define_bool CONFIG_AMIGA_PARTITION y
-  fi
+tristate 'Amiga FFS filesystem support' CONFIG_AFFS_FS
+if [ "$CONFIG_AFFS_FS" != "n" ]; then
+  define_bool CONFIG_AMIGA_PARTITION y
 fi
 tristate 'UFS filesystem support (read only)' CONFIG_UFS_FS
 if [ "$CONFIG_UFS_FS" != "n" ]; then

@@ -273,8 +273,10 @@ struct symbol_table symbol_table = {
  	X(intr_count),
 
 	/* autoirq from  drivers/net/auto_irq.c */
+#ifdef CONFIG_NET
 	X(autoirq_setup),
 	X(autoirq_report),
+#endif
 
 	/* dma handling */
 	X(request_dma),
@@ -360,9 +362,11 @@ struct symbol_table symbol_table = {
 /* all busmice */
 	X(add_mouse_randomness),
 	X(fasync_helper),
+#ifndef __mc68000__
 /* psaux mouse */
 	X(aux_device_present),
 	X(kbd_read_mask),
+#endif
 
 #ifdef CONFIG_BLK_DEV_IDE_PCMCIA
 	X(ide_register),

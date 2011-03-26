@@ -28,6 +28,7 @@
 #include <linux/blk.h>
 #endif
 
+#include <asm/setup.h>
 #include <asm/system.h>
 
 /*
@@ -36,10 +37,11 @@
  * table entries.
  */
 #include <asm/unaligned.h>
+#include <linux/msdos_fs.h>
 
 #define SYS_IND(p)	get_unaligned(&p->sys_ind)
-#define NR_SECTS(p)	get_unaligned(&p->nr_sects)
-#define START_SECT(p)	get_unaligned(&p->start_sect)
+#define NR_SECTS(p)	CF_LE_L(get_unaligned(&p->nr_sects))
+#define START_SECT(p)	CF_LE_L(get_unaligned(&p->start_sect))
 
 
 struct gendisk *gendisk_head = NULL;
@@ -141,7 +143,7 @@ static void extended_partition(struct gendisk *hd, kdev_t dev)
 	   */
 		bh->b_state = 0;
 
-		if (*(unsigned short *) (bh->b_data+510) != 0xAA55)
+		if (*(unsigned short *) (bh->b_data+510) != CF_LE_W(0xAA55))
 			goto done;
 
 		p = (struct partition *) (0x1BE + bh->b_data);
@@ -266,7 +268,7 @@ read_mbr:
 #ifdef CONFIG_BLK_DEV_IDE
 check_table:
 #endif
-	if (*(unsigned short *)  (0x1fe + data) != 0xAA55) {
+	if (*(unsigned short *)  (0x1fe + data) != CF_LE_W(0xAA55)) {
 		brelse(bh);
 		return 0;
 	}
@@ -278,7 +280,7 @@ check_table:
 		 * Look for various forms of IDE disk geometry translation
 		 */
 		extern int ide_xlate_1024(kdev_t, int, const char *);
-		unsigned int sig = *(unsigned short *)(data + 2);
+		unsigned int sig = CF_LE_W(*(unsigned short *)(data + 2));
 		if (SYS_IND(p) == EZD_PARTITION) {
 			/*
 			 * The remainder of the disk must be accessed using
@@ -308,7 +310,7 @@ check_table:
 				brelse(bh);
 				goto read_mbr;	/* start over with new MBR */
 			}
-		} else if (sig <= 0x1ae && *(unsigned short *)(data + sig) == 0x55AA
+		} else if (sig <= 0x1ae && *(unsigned short *)(data + sig) == CF_LE_W(0x55AA)
 			 && (1 & *(unsigned char *)(data + sig + 2)) ) 
 		{
 			/*
@@ -343,6 +345,7 @@ check_table:
 	}
 #endif	/* CONFIG_BLK_DEV_IDE */
 
+	printk(" DOS");	/* show partition type */
 	current_minor += 4;  /* first "extra" minor (for extended partitions) */
 	for (i=1 ; i<=4 ; minor++,i++,p++) {
 		if (!NR_SECTS(p))
@@ -367,7 +370,7 @@ check_table:
 		}
 #ifdef CONFIG_BSD_DISKLABEL
 		if (SYS_IND(p) == BSD_PARTITION) {
-			printk(" <");
+			printk(" BSD<");
 			bsd_disklabel_partition(hd, MKDEV(hd->major, minor));
 			printk(" >");
 		}
@@ -376,7 +379,7 @@ check_table:
 	/*
 	 *  Check for old-style Disk Manager partition table
 	 */
-	if (*(unsigned short *) (data+0xfc) == 0x55AA) {
+	if (*(unsigned short *) (data+0xfc) == CF_LE_W(0x55AA)) {
 		p = (struct partition *) (0x1be + data);
 		for (i = 4 ; i < 16 ; i++, current_minor++) {
 			p--;
@@ -451,6 +454,7 @@ static int osf_partition(struct gendisk *hd, unsigned int dev, unsigned long fir
 		brelse(bh);
 		return 0;
 	}
+	printk(" OSF");
 	for (i = 0 ; i < label->d_npartitions; i++, partition++) {
 		if ((current_minor & mask) == 0)
 		        break;
@@ -518,8 +522,10 @@ static int sun_partition(struct gendisk *hd, kdev_t dev, unsigned long first_sec
 	label = (struct sun_disklabel *) bh->b_data;
 	p = label->partitions;
 	if (label->magic != SUN_LABEL_MAGIC && label->magic != SUN_LABEL_MAGIC_SWAPPED) {
+#if 0
 		printk("Dev %s Sun disklabel: bad magic %04x\n",
 		       kdevname(dev), label->magic);
+#endif
 		brelse(bh);
 		return 0;
 	}
@@ -534,6 +540,7 @@ static int sun_partition(struct gendisk *hd, kdev_t dev, unsigned long first_sec
 		brelse(bh);
 		return 0;
 	}
+	printk(" UFS");
 	/* All Sun disks have 8 partition entries */
 	spc = SWAP16(label->ntrks) * SWAP16(label->nsect);
 	for(i=0; i < 8; i++, p++) {
@@ -559,10 +566,10 @@ static int sun_partition(struct gendisk *hd, kdev_t dev, unsigned long first_sec
 #include <asm/byteorder.h>
 #include <linux/affs_hardblocks.h>
 
-static __inline__ __u32
-checksum_block(__u32 *m, int size)
+static __inline__ u32
+checksum_block(u32 *m, int size)
 {
-	__u32 sum = 0;
+	u32 sum = 0;
 
 	while (size--)
 		sum += htonl(*m++);
@@ -570,7 +577,7 @@ checksum_block(__u32 *m, int size)
 }
 
 static int
-amiga_partition(struct gendisk *hd, unsigned int dev, unsigned long first_sector)
+amiga_partition(struct gendisk *hd, kdev_t dev, unsigned long first_sector)
 {
 	struct buffer_head	*bh;
 	struct RigidDiskBlock	*rdb;
@@ -585,13 +592,15 @@ amiga_partition(struct gendisk *hd, unsigned int dev, unsigned long first_sector
 
 	for (blk = 0; blk < RDB_ALLOCATION_LIMIT; blk++) {
 		if(!(bh = bread(dev,blk,512))) {
-			printk("Dev %d: unable to read RDB block %d\n",dev,blk);
+			printk("Dev %s: unable to read RDB block %d\n",
+			       kdevname(dev),blk);
 			goto rdb_done;
 		}
-		if (*(__u32 *)bh->b_data == htonl(IDNAME_RIGIDDISK)) {
+		if (*(u32 *)bh->b_data == htonl(IDNAME_RIGIDDISK)) {
 			rdb = (struct RigidDiskBlock *)bh->b_data;
-			if (checksum_block((__u32 *)bh->b_data,htonl(rdb->rdb_SummedLongs) & 0x7F)) {
-				printk("Dev %d: RDB in block %d has bad checksum\n",dev,blk);
+			if (checksum_block((u32 *)bh->b_data,htonl(rdb->rdb_SummedLongs) & 0x7F)) {
+				printk("Dev %s: RDB in block %d has bad checksum\n",
+				       kdevname(dev),blk);
 				brelse(bh);
 				continue;
 			}
@@ -600,14 +609,14 @@ amiga_partition(struct gendisk *hd, unsigned int dev, unsigned long first_sector
 			brelse(bh);
 			for (part = 1; blk > 0 && part <= 16; part++) {
 				if (!(bh = bread(dev,blk,512))) {
-					printk("Dev %d: unable to read partition block %d\n",
-						       dev,blk);
+					printk("Dev %s: unable to read partition block %d\n",
+						       kdevname(dev),blk);
 					goto rdb_done;
 				}
 				pb  = (struct PartitionBlock *)bh->b_data;
 				blk = htonl(pb->pb_Next);
 				if (pb->pb_ID == htonl(IDNAME_PARTITION) && checksum_block(
-				    (__u32 *)pb,htonl(pb->pb_SummedLongs) & 0x7F) == 0 ) {
+				    (u32 *)pb,htonl(pb->pb_SummedLongs) & 0x7F) == 0 ) {
 					
 					/* Tell Kernel about it */
 
@@ -636,6 +645,141 @@ rdb_done:
 	return res;
 }
 #endif /* CONFIG_AMIGA_PARTITION */
+
+#ifdef CONFIG_ATARI_PARTITION
+#include <asm/atari_rootsec.h>
+
+/* ++guenther: this should be settable by the user ("make config")?.
+ */
+#define ICD_PARTS
+
+static int atari_partition (struct gendisk *hd, kdev_t dev,
+			    unsigned long first_sector)
+{
+  int minor = current_minor, m_lim = current_minor + hd->max_p;
+  struct buffer_head *bh;
+  struct rootsector *rs;
+  struct partition_info *pi;
+  ulong extensect;
+#ifdef ICD_PARTS
+  int part_fmt = 0; /* 0:unknown, 1:AHDI, 2:ICD/Supra */
+#endif
+
+  bh = bread (dev, 0, 1024);
+  if (!bh)
+    {
+      printk (" unable to read block 0\n");
+      return -1;
+    }
+
+  rs = (struct rootsector *) bh->b_data;
+  pi = &rs->part[0];
+  printk (" AHDI");
+  for (; pi < &rs->part[4] && minor < m_lim; minor++, pi++)
+    {
+      if (pi->flg & 1)
+	/* active partition */
+	{
+	  if (memcmp (pi->id, "XGM", 3) == 0)
+	    /* extension partition */
+	    {
+	      struct rootsector *xrs;
+	      struct buffer_head *xbh;
+	      ulong partsect;
+
+#ifdef ICD_PARTS
+	      part_fmt = 1;
+#endif
+	      printk(" XGM<");
+	      partsect = extensect = pi->st;
+	      while (1)
+		{
+		  xbh = bread (dev, partsect / 2, 1024);
+		  if (!xbh)
+		    {
+		      printk (" block %ld read failed\n", partsect);
+		      brelse(bh);
+		      return 0;
+		    }
+		  if (partsect & 1)
+		    xrs = (struct rootsector *) &xbh->b_data[512];
+		  else
+		    xrs = (struct rootsector *) &xbh->b_data[0];
+
+		  /* ++roman: sanity check: bit 0 of flg field must be set */
+		  if (!(xrs->part[0].flg & 1)) {
+		    printk( "\nFirst sub-partition in extended partition is not valid!\n" );
+		    break;
+		  }
+
+		  add_partition(hd, minor, partsect + xrs->part[0].st,
+				xrs->part[0].siz);
+
+		  if (!(xrs->part[1].flg & 1)) {
+		    /* end of linked partition list */
+		    brelse( xbh );
+		    break;
+		  }
+		  if (memcmp( xrs->part[1].id, "XGM", 3 ) != 0) {
+		    printk( "\nID of extended partition is not XGM!\n" );
+		    brelse( xbh );
+		    break;
+		  }
+
+		  partsect = xrs->part[1].st + extensect;
+		  brelse (xbh);
+		  minor++;
+		  if (minor >= m_lim) {
+		    printk( "\nMaximum number of partitions reached!\n" );
+		    break;
+		  }
+		}
+	      printk(" >");
+	    }
+	  else
+	    {
+	      /* we don't care about other id's */
+	      add_partition (hd, minor, pi->st, pi->siz);
+	    }
+	}
+    }
+#ifdef ICD_PARTS
+  if ( part_fmt!=1 ) /* no extended partitions -> test ICD-format */
+  {
+    pi = &rs->icdpart[0];
+    /* sanity check: no ICD format if first partition invalid */
+    if (memcmp (pi->id, "GEM", 3) == 0 ||
+        memcmp (pi->id, "BGM", 3) == 0 ||
+        memcmp (pi->id, "LNX", 3) == 0 ||
+        memcmp (pi->id, "SWP", 3) == 0 ||
+        memcmp (pi->id, "RAW", 3) == 0 )
+    {
+      printk(" ICD<");
+      for (; pi < &rs->icdpart[8] && minor < m_lim; minor++, pi++)
+      {
+        /* accept only GEM,BGM,RAW,LNX,SWP partitions */
+        if (pi->flg & 1 && 
+            (memcmp (pi->id, "GEM", 3) == 0 ||
+             memcmp (pi->id, "BGM", 3) == 0 ||
+             memcmp (pi->id, "LNX", 3) == 0 ||
+             memcmp (pi->id, "SWP", 3) == 0 ||
+             memcmp (pi->id, "RAW", 3) == 0) )
+        {
+          part_fmt = 2;
+	  add_partition (hd, minor, pi->st, pi->siz);
+        }
+      }
+      printk(" >");
+    }
+  }
+#endif
+  brelse (bh);
+
+  printk ("\n");
+
+  return 1;
+}
+#endif /* CONFIG_ATARI_PARTITION */
 
 static void check_partition(struct gendisk *hd, kdev_t dev)
 {
@@ -672,6 +816,10 @@ static void check_partition(struct gendisk *hd, kdev_t dev)
 #endif
 #ifdef CONFIG_AMIGA_PARTITION
 	if(amiga_partition(hd, dev, first_sector))
+		return;
+#endif
+#ifdef CONFIG_ATARI_PARTITION
+	if(atari_partition(hd, dev, first_sector))
 		return;
 #endif
 	printk(" unknown partition table\n");

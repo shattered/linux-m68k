@@ -362,6 +362,18 @@ void proc_root_init(void)
 		PROC_LOCKS, 5, "locks",
 		S_IFREG | S_IRUGO, 1, 0, 0,
 	});
+#ifdef __mc68000__
+	proc_register(&proc_root, &(struct proc_dir_entry) {
+		PROC_HARDWARE, 8, "hardware",
+		S_IFREG | S_IRUGO, 1, 0, 0,
+	});
+#ifdef CONFIG_ZORRO
+	proc_register(&proc_root, &(struct proc_dir_entry) {
+		PROC_ZORRO, 5, "zorro",
+		S_IFREG | S_IRUGO, 1, 0, 0,
+	});
+#endif /* CONFIG_ZORRO */
+#endif /* __mc68000__ */
 
 	proc_register( &proc_root, &(struct proc_dir_entry)
 	   { PROC_MTAB, 6, "mounts", S_IFREG | S_IRUGO, 1, 0, 0, } );

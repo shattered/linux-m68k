@@ -5,6 +5,28 @@
 #
 #
 
+ifeq ($(ARCH),m68k)
+  L_TARGET := sound.a
+  L_OBJS   :=
+  M_OBJS   :=
+  ifeq ($(CONFIG_DMASOUND),y)
+    L_OBJS += dmasound.o
+  else
+    ifeq ($(CONFIG_DMASOUND),m)
+    M_OBJS += dmasound.o
+    endif
+  endif
+
+  include $(TOPDIR)/Rules.make
+
+  clean:
+	rm -f core *.o *.a *.s
+
+  # dummy rule to keep 'make xconfig' happy
+  mkscript:
+
+else
+
 .PHONY: dummy
 SUB_DIRS	= lowlevel
 VERSION		= `head -1 .version`
@@ -157,5 +179,6 @@ ifdef USE_DEPEND
 #
 ifeq (.depend,$(wildcard .depend))
 include .depend
+endif
 endif
 endif

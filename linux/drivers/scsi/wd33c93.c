@@ -28,9 +28,9 @@
  *
  *    -  Target Disconnection/Reconnection  is now supported. Any
  *          system with more than one device active on the SCSI bus
- *          will benefit from this. The driver defaults to what I'm
- *          'adaptive disconnect' - meaning that each command is
- *          evaluated individually as to whether or not it should
+ *          will benefit from this. The driver defaults to what I
+ *          call 'adaptive disconnect' - meaning that each command
+ *          is evaluated individually as to whether or not it should
  *          be run with the option to disconnect/reselect (if the
  *          device chooses), or as a "SCSI-bus-hog".
  *
@@ -68,11 +68,14 @@
  *
  */
 
+#include <linux/module.h>
+
 #include <asm/system.h>
 #include <linux/sched.h>
 #include <linux/string.h>
 #include <linux/delay.h>
 #include <linux/version.h>
+#include <asm/irq.h>
 
 #if LINUX_VERSION_CODE >= 0x010300
 #include <linux/blk.h>
@@ -82,47 +85,46 @@
 
 #include "scsi.h"
 #include "hosts.h"
+
+
+#define WD33C93_VERSION    "1.25"
+#define WD33C93_DATE       "09/Jul/1997"
+/* NOTE: 1.25 for m68k is related to in2000-1.31 for x86 */
+
+/*
+ * Note - the following defines have been moved to 'wd33c93.h':
+ *
+ *    PROC_INTERFACE
+ *    PROC_STATISTICS
+ *    SYNC_DEBUG
+ *    DEBUGGING_ON
+ *    DEBUG_DEFAULTS
+ *
+ */
+
+
 #include "wd33c93.h"
 
-#ifdef MODULE
-#include <linux/module.h>
-#endif
-
-/* Leave this undefined for now - need to make some changes in the
- * a3000/a2019/gvp11 files to get it working right
- */
-/*#define PROC_INTERFACE*/     /* add code for /proc/scsi/wd33c93/xxx interface */
-
-#define SYNC_DEBUG         /* extra info on sync negotiation printed */
-#define DEBUGGING_ON       /* enable command-line debugging bitmask */
-#define DEBUG_DEFAULTS 0   /* default debugging bitmask */
-
-#define WD33C93_VERSION    "1.21"
-#define WD33C93_DATE       "20/Apr/1996"
-
-#ifdef DEBUGGING_ON
-#define DB(f,a) if (hostdata->args & (f)) a;
-#else
-#define DB(f,a)
-#endif
-
-#define IS_DIR_OUT(cmd) ((cmd)->cmnd[0] == WRITE_6  || \
-                         (cmd)->cmnd[0] == WRITE_10 || \
-                         (cmd)->cmnd[0] == WRITE_12)
 
 
 /*
- * setup_strings is an array of strings that define some of the operating
- * parameters and settings for this driver. It is used unless an amiboot
- * or insmod command line has been specified, in which case those settings
- * are combined with the ones here. The driver recognizes the following
- * keywords (lower case required) and arguments:
+ * 'setup_strings' is a single string used to pass operating parameters and
+ * settings from the kernel/module command-line to the driver. 'setup_args[]'
+ * is an array of strings that define the compile-time default values for
+ * these settings. If Linux boots with an amiboot or insmod command-line,
+ * those settings are combined with 'setup_args[]'. Note that amiboot
+ * command-lines are prefixed with "wd33c93=" while insmod uses a
+ * "setup_strings=" prefix. The driver recognizes the following keywords
+ * (lower case required) and arguments:
  *
  * -  nosync:bitmask -bitmask is a byte where the 1st 7 bits correspond with
- *                    the 7 possible SCSI devices. Set a bit to prevent sync
- *                    negotiation on that device. To maintain backwards
- *                    compatibility, a command-line such as "wd33c93=255" will
- *                    be automatically translated to "wd33c93=nosync:0xff".
+ *                    the 7 possible SCSI devices. Set a bit to negotiate for
+ *                    asynchronous transfers on that device. To maintain
+ *                    backwards compatibility, a command-line such as
+ *                    "wd33c93=255" will be automatically translated to
+ *                    "wd33c93=nosync:0xff".
+ * -  nodma:x        -x = 1 to disable DMA, x = 0 to enable it. Argument is
+ *                    optional - if not present, same as "nodma:1".
  * -  period:ns      -ns is the minimum # of nanoseconds in a SCSI data transfer
  *                    period. Default is 500; acceptable values are 250 - 1000.
  * -  disconnect:x   -x = 0 to never allow disconnects, 2 to always allow them.
@@ -141,33 +143,37 @@
  *    _must_ be a colon between a keyword and its numeric argument, with no
  *    spaces.
  * -  Keywords are separated by commas, no spaces, in the standard kernel
- *    command-line manner, except in the case of 'setup_strings[]' (see
- *    below), which is simply a C array of pointers to char. Each element
- *    in the array is a string comprising one keyword & argument.
+ *    command-line manner.
  * -  A keyword in the 'nth' comma-separated command-line member will overwrite
- *    the 'nth' element of setup_strings[]. A blank command-line member (in
+ *    the 'nth' element of setup_args[]. A blank command-line member (in
  *    other words, a comma with no preceding keyword) will _not_ overwrite
- *    the corresponding setup_strings[] element.
+ *    the corresponding setup_args[] element.
  * -  If a keyword is used more than once, the first one applies to the first
  *    SCSI host found, the second to the second card, etc, unless the 'next'
  *    keyword is used to change the order.
  *
  * Some amiboot examples (for insmod, use 'setup_strings' instead of 'wd33c93'):
  * -  wd33c93=nosync:255
+ * -  wd33c93=nodma
+ * -  wd33c93=nodma:1
  * -  wd33c93=disconnect:2,nosync:0x08,period:250
  * -  wd33c93=debug:0x1c
  */
 
-static char *setup_strings[] =
-      {"","","","","","","","","","","",""};
+/* Normally, no defaults are specified */
+static char *setup_args[] =
+      {"","","","","","","","",""};
 
-#ifdef PROC_INTERFACE
-unsigned long disc_allowed_total;
-unsigned long disc_taken_total;
+/* filled in by 'insmod' */
+static char *setup_strings = 0;
+
+#ifdef MODULE_PARM
+MODULE_PARM(setup_strings, "s");
 #endif
 
 
-inline uchar read_wd33c93(wd33c93_regs *regp,uchar reg_num)
+
+static inline uchar read_wd33c93(wd33c93_regs *regp,uchar reg_num)
 {
    regp->SASR = reg_num;
    return(regp->SCMD);
@@ -177,21 +183,21 @@ inline uchar read_wd33c93(wd33c93_regs *regp,uchar reg_num)
 #define READ_AUX_STAT() (regp->SASR)
 
 
-inline void write_wd33c93(wd33c93_regs *regp,uchar reg_num, uchar value)
+static inline void write_wd33c93(wd33c93_regs *regp,uchar reg_num, uchar value)
 {
    regp->SASR = reg_num;
    regp->SCMD = value;
 }
 
 
-inline void write_wd33c93_cmd(wd33c93_regs *regp, uchar cmd)
+static inline void write_wd33c93_cmd(wd33c93_regs *regp, uchar cmd)
 {
    regp->SASR = WD_COMMAND;
    regp->SCMD = cmd;
 }
 
 
-inline uchar read_1_byte(wd33c93_regs *regp)
+static inline uchar read_1_byte(wd33c93_regs *regp)
 {
 uchar asr;
 uchar x = 0;
@@ -207,7 +213,7 @@ uchar x = 0;
 }
 
 
-void write_wd33c93_count(wd33c93_regs *regp,unsigned long value)
+static void write_wd33c93_count(wd33c93_regs *regp,unsigned long value)
 {
    regp->SASR = WD_TRANSFER_COUNT_MSB;
    regp->SCMD = value >> 16;
@@ -216,7 +222,7 @@ void write_wd33c93_count(wd33c93_regs *regp,unsigned long value)
 }
 
 
-unsigned long read_wd33c93_count(wd33c93_regs *regp)
+static unsigned long read_wd33c93_count(wd33c93_regs *regp)
 {
 unsigned long value;
 
@@ -225,6 +231,32 @@ unsigned long value;
    value |= regp->SCMD << 8;
    value |= regp->SCMD;
    return value;
+}
+
+
+/* The 33c93 needs to be told which direction a command transfers its
+ * data; we use this function to figure it out. Returns true if there
+ * will be a DATA_OUT phase with this command, false otherwise.
+ * (Thanks to Joerg Dorchain for the research and suggestion.)
+ */
+static int is_dir_out(Scsi_Cmnd *cmd)
+{
+   switch (cmd->cmnd[0]) {
+      case WRITE_6:           case WRITE_10:          case WRITE_12:
+      case WRITE_LONG:        case WRITE_SAME:        case WRITE_BUFFER:
+      case WRITE_VERIFY:      case WRITE_VERIFY_12:      
+      case COMPARE:           case COPY:              case COPY_VERIFY:
+      case SEARCH_EQUAL:      case SEARCH_HIGH:       case SEARCH_LOW:
+      case SEARCH_EQUAL_12:   case SEARCH_HIGH_12:    case SEARCH_LOW_12:      
+      case FORMAT_UNIT:       case REASSIGN_BLOCKS:   case RESERVE:
+      case MODE_SELECT:       case MODE_SELECT_10:    case LOG_SELECT:
+      case SEND_DIAGNOSTIC:   case CHANGE_DEFINITION: case UPDATE_BLOCK:
+      case SET_WINDOW:        case MEDIUM_SCAN:       case SEND_VOLUME_TAG:
+      case 0xea:
+         return 1;
+      default:
+         return 0;
+      }
 }
 
 
@@ -240,7 +272,7 @@ static struct sx_period sx_table[] = {
    {1000,0x00},
    {0,   0} };
 
-int round_period(unsigned int period)
+static int round_period(unsigned int period)
 {
 int x;
 
@@ -253,7 +285,7 @@ int x;
    return 7;
 }
 
-uchar calc_sync_xfer(unsigned int period, unsigned int offset)
+static uchar calc_sync_xfer(unsigned int period, unsigned int offset)
 {
 uchar result;
 
@@ -265,17 +297,14 @@ uchar result;
 
 
 
-void wd33c93_execute(struct Scsi_Host *instance);
+static void wd33c93_execute(struct Scsi_Host *instance);
 
 int wd33c93_queuecommand (Scsi_Cmnd *cmd, void (*done)(Scsi_Cmnd *))
 {
-struct WD33C93_hostdata *hostdata;
-Scsi_Cmnd *tmp;
-unsigned long flags;
+   struct WD33C93_hostdata *hostdata;
+   Scsi_Cmnd *tmp;
+   unsigned long flags;
 
-
-   save_flags(flags);
-   cli();
    hostdata = (struct WD33C93_hostdata *)cmd->host->hostdata;
 
 DB(DB_QUEUE_COMMAND,printk("Q-%d-%02x-%ld( ",cmd->target,cmd->cmnd[0],cmd->pid))
@@ -318,15 +347,33 @@ DB(DB_QUEUE_COMMAND,printk("Q-%d-%02x-%ld( ",cmd->target,cmd->cmnd[0],cmd->pid))
       cmd->SCp.this_residual = cmd->request_bufflen;
       }
 
-/* Preset the command status to GOOD, since that's the normal case */
+/* WD docs state that at the conclusion of a "LEVEL2" command, the
+ * status byte can be retrieved from the LUN register. Apparently,
+ * this is the case only for *uninterrupted* LEVEL2 commands! If
+ * there are any unexpected phases entered, even if they are 100%
+ * legal (different devices may choose to do things differently),
+ * the LEVEL2 command sequence is exited. This often occurs prior
+ * to receiving the status byte, in which case the driver does a
+ * status phase interrupt and gets the status byte on its own.
+ * While such a command can then be "resumed" (ie restarted to
+ * finish up as a LEVEL2 command), the LUN register will NOT be
+ * a valid status byte at the command's conclusion, and we must
+ * use the byte obtained during the earlier interrupt. Here, we
+ * preset SCp.Status to an illegal value (0xff) so that when
+ * this command finally completes, we can tell where the actual
+ * status byte is stored.
+ */
 
-   cmd->SCp.Status = GOOD;
+   cmd->SCp.Status = ILLEGAL_STATUS_BYTE;
 
    /*
     * Add the cmd to the end of 'input_Q'. Note that REQUEST SENSE
     * commands are added to the head of the queue so that the desired
     * sense data is not lost before REQUEST_SENSE executes.
     */
+
+   save_flags(flags);
+   cli();
 
    if (!(hostdata->input_Q) || (cmd->cmnd[0] == REQUEST_SENSE)) {
       cmd->host_scribble = (uchar *)hostdata->input_Q;
@@ -358,18 +405,18 @@ DB(DB_QUEUE_COMMAND,printk(")Q-%ld ",cmd->pid))
  * already connected, we give up immediately. Otherwise, look through
  * the input_Q, using the first command we find that's intended
  * for a currently non-busy target/lun.
+ *
+ * wd33c93_execute() is always called with interrupts disabled or from
+ * the wd33c93_intr itself, which means that a wd33c93 interrupt
+ * cannot occur while we are in here.
  */
-void wd33c93_execute (struct Scsi_Host *instance)
+static void wd33c93_execute (struct Scsi_Host *instance)
 {
 struct WD33C93_hostdata *hostdata;
 wd33c93_regs *regp;
 Scsi_Cmnd *cmd, *prev;
-unsigned long flags;
 int i;
 
-
-   save_flags(flags);
-   cli();
    hostdata = (struct WD33C93_hostdata *)instance->hostdata;
    regp = hostdata->regp;
 
@@ -379,7 +426,6 @@ DB(DB_EXECUTE,printk("EX("))
 
 DB(DB_EXECUTE,printk(")EX-0 "))
 
-      restore_flags(flags);
       return;
       }
 
@@ -403,7 +449,6 @@ DB(DB_EXECUTE,printk(")EX-0 "))
 
 DB(DB_EXECUTE,printk(")EX-1 "))
 
-      restore_flags(flags);
       return;
       }
 
@@ -414,11 +459,15 @@ DB(DB_EXECUTE,printk(")EX-1 "))
    else
       hostdata->input_Q = (Scsi_Cmnd *)cmd->host_scribble;
 
+#ifdef PROC_STATISTICS
+   hostdata->cmd_cnt[cmd->target]++;
+#endif
+
    /*
     * Start the selection process
     */
 
-   if (IS_DIR_OUT(cmd))
+   if (is_dir_out(cmd))
       write_wd33c93(regp, WD_DESTINATION_ID, cmd->target);
    else
       write_wd33c93(regp, WD_DESTINATION_ID, cmd->target | DSTID_DPD);
@@ -471,11 +520,12 @@ DB(DB_EXECUTE,printk(")EX-1 "))
 yes:
    cmd->SCp.phase = 1;
 
-#ifdef PROC_INTERFACE
-   disc_allowed_total++;
+#ifdef PROC_STATISTICS
+   hostdata->disc_allowed_cnt[cmd->target]++;
 #endif
 
 no:
+
    write_wd33c93(regp, WD_SOURCE_ID, ((cmd->SCp.phase)?SRCID_ER:0));
 
    write_wd33c93(regp, WD_TARGET_LUN, cmd->lun);
@@ -501,17 +551,14 @@ no:
  * sync_xfer[] entry is initialized to the default/safe value. SS_UNSET
  * means that the parameters are undetermined as yet, and that we
  * need to send an SDTR message to this device after selection is
- * complete. We set SS_FIRST to tell the interrupt routine to do so,
- * unless we've been asked not to try synchronous transfers on this
- * target (and _all_ luns within it): In this case we set SS_SET to
- * make the defaults final.
+ * complete: We set SS_FIRST to tell the interrupt routine to do so.
+ * If we've been asked not to try synchronous transfers on this
+ * target (and _all_ luns within it), we'll still send the SDTR message
+ * later, but at that time we'll negotiate for async by specifying a
+ * sync fifo depth of 0.
  */
-      if (hostdata->sync_stat[cmd->target] == SS_UNSET) {
-         if (hostdata->no_sync & (1 << cmd->target))
-            hostdata->sync_stat[cmd->target] = SS_SET;
-         else
+      if (hostdata->sync_stat[cmd->target] == SS_UNSET)
             hostdata->sync_stat[cmd->target] = SS_FIRST;
-         }
       hostdata->state = S_SELECTING;
       write_wd33c93_count(regp,0); /* guarantee a DATA_PHASE interrupt */
       write_wd33c93_cmd(regp, WD_CMD_SEL_ATN);
@@ -546,13 +593,14 @@ no:
 
       write_wd33c93(regp, WD_OWN_ID, cmd->cmd_len);
 
-   /* When doing a non-disconnect command, we can save ourselves a DATA
-    * phase interrupt later by setting everything up now.
+   /* When doing a non-disconnect command with DMA, we can save
+    * ourselves a DATA phase interrupt later by setting everything
+    * up ahead of time.
     */
 
-      if (cmd->SCp.phase == 0) {
+      if ((cmd->SCp.phase == 0) && (hostdata->no_dma == 0)) {
          if (hostdata->dma_setup(cmd,
-                     (IS_DIR_OUT(cmd))?DATA_OUT_DIR:DATA_IN_DIR))
+                     (is_dir_out(cmd))?DATA_OUT_DIR:DATA_IN_DIR))
             write_wd33c93_count(regp,0); /* guarantee a DATA_PHASE interrupt */
          else {
             write_wd33c93_count(regp, cmd->SCp.this_residual);
@@ -575,18 +623,16 @@ no:
     */
       
 DB(DB_EXECUTE,printk("%s%ld)EX-2 ",(cmd->SCp.phase)?"d:":"",cmd->pid))
-
-   restore_flags(flags);
 }
 
 
 
-void transfer_pio(wd33c93_regs *regp, uchar *buf, int cnt,
+static void transfer_pio(wd33c93_regs *regp, uchar *buf, int cnt,
                   int data_in_dir, struct WD33C93_hostdata *hostdata)
 {
 uchar asr;
 
-DB(DB_TRANSFER,printk("(%p,%d,%s)",buf,cnt,data_in_dir?"in":"out"))
+DB(DB_TRANSFER,printk("(%p,%d,%s:",buf,cnt,data_in_dir?"in":"out"))
 
    write_wd33c93(regp, WD_CONTROL, CTRL_IDI | CTRL_EDI | CTRL_POLLED);
    write_wd33c93_count(regp,cnt);
@@ -617,9 +663,10 @@ DB(DB_TRANSFER,printk("(%p,%d,%s)",buf,cnt,data_in_dir?"in":"out"))
 
 
 
-void transfer_bytes(wd33c93_regs *regp, Scsi_Cmnd *cmd, int data_in_dir)
+static void transfer_bytes(wd33c93_regs *regp, Scsi_Cmnd *cmd, int data_in_dir)
 {
 struct WD33C93_hostdata *hostdata;
+unsigned long length;
 
    hostdata = (struct WD33C93_hostdata *)cmd->host->hostdata;
 
@@ -640,11 +687,27 @@ struct WD33C93_hostdata *hostdata;
 
    write_wd33c93(regp,WD_SYNCHRONOUS_TRANSFER,hostdata->sync_xfer[cmd->target]);
 
-/* 'dma_setup()' will return TRUE if we can't do DMA. */
+/* 'hostdata->no_dma' is TRUE if we don't even want to try DMA.
+ * Update 'this_residual' and 'ptr' after 'transfer_pio()' returns.
+ */
 
-   if (hostdata->dma_setup(cmd, data_in_dir)) {
-      transfer_pio(regp, (uchar *)&cmd->SCp.ptr, cmd->SCp.this_residual,
+   if (hostdata->no_dma)
+      goto use_transfer_pio;
+
+/* 'dma_setup()' will return TRUE if we can't do DMA.
+ * Update 'this_residual' and 'ptr' after 'transfer_pio()' returns.
+ */
+
+   else if (hostdata->dma_setup(cmd, data_in_dir)) {
+use_transfer_pio:
+#ifdef PROC_STATISTICS
+      hostdata->pio_cnt++;
+#endif
+      transfer_pio(regp, (uchar *)cmd->SCp.ptr, cmd->SCp.this_residual,
                          data_in_dir, hostdata);
+      length = cmd->SCp.this_residual;
+      cmd->SCp.this_residual = read_wd33c93_count(regp);
+      cmd->SCp.ptr += (length - cmd->SCp.this_residual);
       }
 
 /* We are able to do DMA (in fact, the Amiga hardware is
@@ -657,10 +720,14 @@ struct WD33C93_hostdata *hostdata;
  */
 
    else {
+#ifdef PROC_STATISTICS
+      hostdata->dma_cnt++;
+#endif
       write_wd33c93(regp, WD_CONTROL, CTRL_IDI | CTRL_EDI | CTRL_DMA);
       write_wd33c93_count(regp,cmd->SCp.this_residual);
 
-      if ((hostdata->level2 >= L2_DATA) || (cmd->SCp.phase == 0)) {
+      if ((hostdata->level2 >= L2_DATA) ||
+          (hostdata->level2 == L2_BASIC && cmd->SCp.phase == 0)) {
          write_wd33c93(regp, WD_COMMAND_PHASE, 0x45);
          write_wd33c93_cmd(regp, WD_CMD_SEL_ATN_XFER);
          hostdata->state = S_RUNNING_LEVEL2;
@@ -679,10 +746,8 @@ void wd33c93_intr (struct Scsi_Host *instance)
 struct WD33C93_hostdata *hostdata;
 Scsi_Cmnd *patch, *cmd;
 wd33c93_regs *regp;
-unsigned long flags;
 uchar asr, sr, phs, id, lun, *ucp, msg;
-unsigned long length;
-
+unsigned long length, flags;
 
    hostdata = (struct WD33C93_hostdata *)instance->hostdata;
    regp = hostdata->regp;
@@ -691,10 +756,11 @@ unsigned long length;
    if (!(asr & ASR_INT) || (asr & ASR_BSY))
       return;
 
-/* OK - it should be safe to re-enable system interrupts */
-
    save_flags(flags);
-   sti();
+
+#ifdef PROC_STATISTICS
+   hostdata->int_cnt++;
+#endif
 
    cmd = (Scsi_Cmnd *)hostdata->connected;   /* assume we're connected */
    sr = read_wd33c93(regp, WD_SCSI_STATUS);  /* clear the interrupt */
@@ -734,7 +800,6 @@ DB(DB_TRANSFER,printk("%p/%d]",cmd->SCp.ptr,cmd->SCp.this_residual))
       case CSR_TIMEOUT:
 DB(DB_INTR,printk("TIMEOUT"))
 
-         cli();
          if (hostdata->state == S_RUNNING_LEVEL2)
             hostdata->connected = NULL;
          else {
@@ -747,11 +812,22 @@ DB(DB_INTR,printk("TIMEOUT"))
          hostdata->state = S_UNCONNECTED;
          cmd->scsi_done(cmd);
 
+    /* From esp.c:
+     * There is a window of time within the scsi_done() path
+     * of execution where interrupts are turned back on full
+     * blast and left that way.  During that time we could
+     * reconnect to a disconnected command, then we'd bomb
+     * out below.  We could also end up executing two commands
+     * at _once_.  ...just so you know why the restore_flags()
+     * is here...
+     */
+
+    restore_flags(flags);
+
 /* We are not connected to a target - check to see if there
  * are commands waiting to be executed.
  */
 
-         sti();
          wd33c93_execute(instance);
          break;
 
@@ -759,7 +835,7 @@ DB(DB_INTR,printk("TIMEOUT"))
 /* Note: this interrupt should not occur in a LEVEL2 command */
 
       case CSR_SELECT:
-         cli();
+
 DB(DB_INTR,printk("SELECT"))
          hostdata->connected = cmd = (Scsi_Cmnd *)hostdata->selecting;
          hostdata->selecting = NULL;
@@ -777,13 +853,23 @@ printk(" sending SDTR ");
 
             hostdata->sync_stat[cmd->target] = SS_WAITING;
 
-      /* tack on a 2nd message to ask about synchronous transfers */
+/* Tack on a 2nd message to ask about synchronous transfers. If we've
+ * been asked to do only asynchronous transfers on this device, we
+ * request a fifo depth of 0, which is equivalent to async - should
+ * solve the problems some people have had with GVP's Guru ROM.
+ */
 
             hostdata->outgoing_msg[1] = EXTENDED_MESSAGE;
             hostdata->outgoing_msg[2] = 3;
             hostdata->outgoing_msg[3] = EXTENDED_SDTR;
+            if (hostdata->no_sync & (1 << cmd->target)) {
+               hostdata->outgoing_msg[4] = hostdata->default_sx_per/4;
+               hostdata->outgoing_msg[5] = 0;
+               }
+            else {
             hostdata->outgoing_msg[4] = OPTIMUM_SX_PER/4;
             hostdata->outgoing_msg[5] = OPTIMUM_SX_OFF;
+               }
             hostdata->outgoing_len = 6;
             }
          else
@@ -827,9 +913,10 @@ DB(DB_INTR,printk("CMND-%02x,%ld",cmd->cmnd[0],cmd->pid))
       case CSR_XFER_DONE|PHS_STATUS:
       case CSR_UNEXP    |PHS_STATUS:
       case CSR_SRV_REQ  |PHS_STATUS:
-DB(DB_INTR,printk("STATUS"))
+DB(DB_INTR,printk("STATUS="))
 
          cmd->SCp.Status = read_1_byte(regp);
+DB(DB_INTR,printk("%02x",cmd->SCp.Status))
          if (hostdata->level2 >= L2_BASIC) {
             sr = read_wd33c93(regp, WD_SCSI_STATUS);  /* clear interrupt */
             hostdata->state = S_RUNNING_LEVEL2;
@@ -837,7 +924,6 @@ DB(DB_INTR,printk("STATUS"))
             write_wd33c93_cmd(regp, WD_CMD_SEL_ATN_XFER);
             }
          else {
-DB(DB_INTR,printk("=%02x",cmd->SCp.Status))
             hostdata->state = S_CONNECTED;
             }
          break;
@@ -848,7 +934,6 @@ DB(DB_INTR,printk("=%02x",cmd->SCp.Status))
       case CSR_SRV_REQ  |PHS_MESS_IN:
 DB(DB_INTR,printk("MSG_IN="))
 
-         cli();
          msg = read_1_byte(regp);
          sr = read_wd33c93(regp, WD_SCSI_STATUS);  /* clear interrupt */
 
@@ -991,13 +1076,13 @@ printk("sync_xfer=%02x",hostdata->sync_xfer[cmd->target]);
                write_wd33c93_cmd(regp,WD_CMD_NEGATE_ACK);
                hostdata->state = S_CONNECTED;
             }
+         restore_flags(flags);
          break;
 
 
 /* Note: this interrupt will occur only after a LEVEL2 command */
 
       case CSR_SEL_XFER_DONE:
-         cli();
 
 /* Make sure that reselection is enabled at this point - it may
  * have been turned off for the command that just completed.
@@ -1008,21 +1093,22 @@ printk("sync_xfer=%02x",hostdata->sync_xfer[cmd->target]);
 DB(DB_INTR,printk("SX-DONE-%ld",cmd->pid))
             cmd->SCp.Message = COMMAND_COMPLETE;
             lun = read_wd33c93(regp, WD_TARGET_LUN);
-            if (cmd->SCp.Status == GOOD)
-               cmd->SCp.Status = lun;
+DB(DB_INTR,printk(":%d.%d",cmd->SCp.Status,lun))
             hostdata->connected = NULL;
-            if (cmd->cmnd[0] != REQUEST_SENSE)
-               cmd->result = cmd->SCp.Status | (cmd->SCp.Message << 8);
-            else if (cmd->SCp.Status != GOOD)
-               cmd->result = (cmd->result & 0x00ffff) | (DID_ERROR << 16);
             hostdata->busy[cmd->target] &= ~(1 << cmd->lun);
             hostdata->state = S_UNCONNECTED;
+            if (cmd->SCp.Status == ILLEGAL_STATUS_BYTE)
+               cmd->SCp.Status = lun;
+            if (cmd->cmnd[0] == REQUEST_SENSE && cmd->SCp.Status != GOOD)
+               cmd->result = (cmd->result & 0x00ffff) | (DID_ERROR << 16);
+            else
+               cmd->result = cmd->SCp.Status | (cmd->SCp.Message << 8);
             cmd->scsi_done(cmd);
 
 /* We are no longer  connected to a target - check to see if
  * there are commands waiting to be executed.
  */
-
+       restore_flags(flags);
             wd33c93_execute(instance);
             }
          else {
@@ -1081,8 +1167,6 @@ DB(DB_INTR,printk("%02x",hostdata->outgoing_msg[0]))
  * so we treat it as a normal command-complete-disconnect.
  */
 
-         cli();
-
 /* Make sure that reselection is enabled at this point - it may
  * have been turned off for the command that just completed.
  */
@@ -1097,22 +1181,22 @@ DB(DB_INTR,printk("UNEXP_DISC-%ld",cmd->pid))
          hostdata->connected = NULL;
          hostdata->busy[cmd->target] &= ~(1 << cmd->lun);
          hostdata->state = S_UNCONNECTED;
-         if (cmd->cmnd[0] != REQUEST_SENSE)
-            cmd->result = cmd->SCp.Status | (cmd->SCp.Message << 8);
-         else if (cmd->SCp.Status != GOOD)
+         if (cmd->cmnd[0] == REQUEST_SENSE && cmd->SCp.Status != GOOD)
             cmd->result = (cmd->result & 0x00ffff) | (DID_ERROR << 16);
+         else
+            cmd->result = cmd->SCp.Status | (cmd->SCp.Message << 8);
          cmd->scsi_done(cmd);
 
 /* We are no longer connected to a target - check to see if
  * there are commands waiting to be executed.
  */
-
+    /* look above for comments on scsi_done() */
+    restore_flags(flags);
          wd33c93_execute(instance);
          break;
 
 
       case CSR_DISC:
-         cli();
 
 /* Make sure that reselection is enabled at this point - it may
  * have been turned off for the command that just completed.
@@ -1129,11 +1213,13 @@ DB(DB_INTR,printk("DISC-%ld",cmd->pid))
                hostdata->connected = NULL;
                hostdata->busy[cmd->target] &= ~(1 << cmd->lun);
                hostdata->state = S_UNCONNECTED;
-               if (cmd->cmnd[0] != REQUEST_SENSE)
-                  cmd->result = cmd->SCp.Status | (cmd->SCp.Message << 8);
-               else if (cmd->SCp.Status != GOOD)
+DB(DB_INTR,printk(":%d",cmd->SCp.Status))
+               if (cmd->cmnd[0] == REQUEST_SENSE && cmd->SCp.Status != GOOD)
                   cmd->result = (cmd->result & 0x00ffff) | (DID_ERROR << 16);
+               else
+                  cmd->result = cmd->SCp.Status | (cmd->SCp.Message << 8);
                cmd->scsi_done(cmd);
+          restore_flags(flags);
                break;
             case S_PRE_TMP_DISC:
             case S_RUNNING_LEVEL2:
@@ -1142,8 +1228,8 @@ DB(DB_INTR,printk("DISC-%ld",cmd->pid))
                hostdata->connected = NULL;
                hostdata->state = S_UNCONNECTED;
 
-#ifdef PROC_INTERFACE
-               disc_taken_total++;
+#ifdef PROC_STATISTICS
+               hostdata->disc_done_cnt[cmd->target]++;
 #endif
 
                break;
@@ -1155,15 +1241,12 @@ DB(DB_INTR,printk("DISC-%ld",cmd->pid))
 /* We are no longer connected to a target - check to see if
  * there are commands waiting to be executed.
  */
-
          wd33c93_execute(instance);
          break;
 
 
       case CSR_RESEL_AM:
 DB(DB_INTR,printk("RESEL"))
-
-         cli();
 
    /* First we have to make sure this reselection didn't */
    /* happen during Arbitration/Selection of some other device. */
@@ -1243,7 +1326,7 @@ DB(DB_INTR,printk("RESEL"))
     * But we DO need to fix the DPD bit so it's correct for this command.
     */
 
-         if (IS_DIR_OUT(cmd))
+         if (is_dir_out(cmd))
             write_wd33c93(regp, WD_DESTINATION_ID, cmd->target);
          else
             write_wd33c93(regp, WD_DESTINATION_ID, cmd->target | DSTID_DPD);
@@ -1263,15 +1346,13 @@ DB(DB_INTR,printk("-%ld",cmd->pid))
          printk("--UNKNOWN INTERRUPT:%02x:%02x:%02x--",asr,sr,phs);
       }
 
-   restore_flags(flags);
-
 DB(DB_INTR,printk("} "))
 
 }
 
 
 
-void reset_wd33c93(struct Scsi_Host *instance)
+static void reset_wd33c93(struct Scsi_Host *instance)
 {
 struct WD33C93_hostdata *hostdata;
 wd33c93_regs *regp;
@@ -1319,7 +1400,6 @@ int wd33c93_reset(Scsi_Cmnd *SCpnt, unsigned int reset_flags)
 int wd33c93_reset(Scsi_Cmnd *SCpnt)
 #endif
 {
-unsigned long flags;
 struct Scsi_Host *instance;
 struct WD33C93_hostdata *hostdata;
 int i;
@@ -1328,8 +1408,7 @@ int i;
    hostdata = (struct WD33C93_hostdata *)instance->hostdata;
 
    printk("scsi%d: reset. ", instance->host_no);
-   save_flags(flags);
-   cli();
+   disable_irq(instance->irq);
 
    ((struct WD33C93_hostdata *)instance->hostdata)->dma_stop(instance,NULL,0);
    for (i = 0; i < 8; i++) {
@@ -1348,7 +1427,7 @@ int i;
 
    reset_wd33c93(instance);
    SCpnt->result = DID_RESET << 16;
-   restore_flags(flags);
+   enable_irq(instance->irq);
    return 0;
 }
 
@@ -1360,10 +1439,8 @@ struct Scsi_Host *instance;
 struct WD33C93_hostdata *hostdata;
 wd33c93_regs *regp;
 Scsi_Cmnd *tmp, *prev;
-unsigned long flags;
 
-   save_flags (flags);
-   cli();
+   disable_irq(cmd->host->irq);
 
    instance = cmd->host;
    hostdata = (struct WD33C93_hostdata *)instance->hostdata;
@@ -1384,8 +1461,8 @@ unsigned long flags;
          cmd->result = DID_ABORT << 16;
          printk("scsi%d: Abort - removing command %ld from input_Q. ",
            instance->host_no, cmd->pid);
+    enable_irq(cmd->host->irq);
          cmd->scsi_done(cmd);
-         restore_flags(flags);
          return SCSI_ABORT_SUCCESS;
          }
       prev = tmp;
@@ -1453,12 +1530,12 @@ unsigned long flags;
       hostdata->connected = NULL;
       hostdata->state = S_UNCONNECTED;
       cmd->result = DID_ABORT << 16;
-      cmd->scsi_done(cmd);
 
 /*      sti();*/
       wd33c93_execute (instance);
 
-      restore_flags(flags);
+      enable_irq(cmd->host->irq);
+      cmd->scsi_done(cmd);
       return SCSI_ABORT_SUCCESS;
       }
 
@@ -1474,7 +1551,7 @@ unsigned long flags;
          printk("scsi%d: Abort - command %ld found on disconnected_Q - ",
                  instance->host_no, cmd->pid);
          printk("returning ABORT_SNOOZE. ");
-         restore_flags(flags);
+    enable_irq(cmd->host->irq);
          return SCSI_ABORT_SNOOZE;
          }
       tmp = (Scsi_Cmnd *)tmp->host_scribble;
@@ -1493,7 +1570,7 @@ unsigned long flags;
 /*   sti();*/
    wd33c93_execute (instance);
 
-   restore_flags(flags);
+   enable_irq(cmd->host->irq);
    printk("scsi%d: warning : SCSI command probably completed successfully"
       "         before abortion. ", instance->host_no);
    return SCSI_ABORT_NOT_RUNNING;
@@ -1502,10 +1579,11 @@ unsigned long flags;
 
 
 #define MAX_WD33C93_HOSTS 4
-#define MAX_SETUP_STRINGS (sizeof(setup_strings) / sizeof(char *))
+#define MAX_SETUP_ARGS (sizeof(setup_args) / sizeof(char *))
 #define SETUP_BUFFER_SIZE 200
 static char setup_buffer[SETUP_BUFFER_SIZE];
-static char setup_used[MAX_SETUP_STRINGS];
+static char setup_used[MAX_SETUP_ARGS];
+static int done_setup = 0;
 
 void wd33c93_setup (char *str, int *ints)
 {
@@ -1534,45 +1612,46 @@ char *p1,*p2;
    setup_buffer[SETUP_BUFFER_SIZE - 1] = '\0';
    p1 = setup_buffer;
    i = 0;
-   while (*p1 && (i < MAX_SETUP_STRINGS)) {
+   while (*p1 && (i < MAX_SETUP_ARGS)) {
       p2 = strchr(p1, ',');
       if (p2) {
          *p2 = '\0';
          if (p1 != p2)
-            setup_strings[i] = p1;
+            setup_args[i] = p1;
          p1 = p2 + 1;
          i++;
          }
       else {
-         setup_strings[i] = p1;
+         setup_args[i] = p1;
          break;
          }
       }
-   for (i=0; i<MAX_SETUP_STRINGS; i++)
+   for (i=0; i<MAX_SETUP_ARGS; i++)
       setup_used[i] = 0;
+   done_setup = 1;
 }
 
 
-/* check_setup_strings() returns index if key found, 0 if not
+/* check_setup_args() returns index if key found, 0 if not
  */
 
-int check_setup_strings(char *key, int *flags, int *val, char *buf)
+static int check_setup_args(char *key, int *flags, int *val, char *buf)
 {
 int x;
 char *cp;
 
-   for  (x=0; x<MAX_SETUP_STRINGS; x++) {
+   for  (x=0; x<MAX_SETUP_ARGS; x++) {
       if (setup_used[x])
          continue;
-      if (!strncmp(setup_strings[x], key, strlen(key)))
+      if (!strncmp(setup_args[x], key, strlen(key)))
          break;
-      if (!strncmp(setup_strings[x], "next", strlen("next")))
+      if (!strncmp(setup_args[x], "next", strlen("next")))
          return 0;
       }
-   if (x == MAX_SETUP_STRINGS)
+   if (x == MAX_SETUP_ARGS)
       return 0;
    setup_used[x] = 1;
-   cp = setup_strings[x] + strlen(key);
+   cp = setup_args[x] + strlen(key);
    *val = -1;
    if (*cp != ':')
       return ++x;
@@ -1594,6 +1673,9 @@ int flags;
 int val;
 char buf[32];
 
+   if (!done_setup && setup_strings)
+      wd33c93_setup(setup_strings,0);
+
    hostdata = (struct WD33C93_hostdata *)instance->hostdata;
 
    hostdata->regp = regs;
@@ -1606,6 +1688,11 @@ char buf[32];
       hostdata->busy[i] = 0;
       hostdata->sync_xfer[i] = calc_sync_xfer(DEFAULT_SX_PER/4,DEFAULT_SX_OFF);
       hostdata->sync_stat[i] = SS_UNSET;  /* using default sync values */
+#ifdef PROC_STATISTICS
+      hostdata->cmd_cnt[i] = 0;
+      hostdata->disc_allowed_cnt[i] = 0;
+      hostdata->disc_done_cnt[i] = 0;
+#endif
       }
    hostdata->input_Q = NULL;
    hostdata->selecting = NULL;
@@ -1620,34 +1707,43 @@ char buf[32];
    hostdata->outgoing_len = 0;
    hostdata->default_sx_per = DEFAULT_SX_PER;
    hostdata->no_sync = 0xff;     /* sync defaults to off */
+   hostdata->no_dma = 0;         /* default is DMA enabled */
 
 #ifdef PROC_INTERFACE
-   hostdata->proc = PR_VERSION|PR_INFO|PR_TOTALS|
+   hostdata->proc = PR_VERSION|PR_INFO|PR_STATISTICS|
                     PR_CONNECTED|PR_INPUTQ|PR_DISCQ|
                     PR_STOP;
-
-   disc_allowed_total = 0;
-   disc_taken_total = 0;
+#ifdef PROC_STATISTICS
+   hostdata->dma_cnt = 0;
+   hostdata->pio_cnt = 0;
+   hostdata->int_cnt = 0;
+#endif
 #endif
 
 
-   if (check_setup_strings("nosync",&flags,&val,buf))
+   if (check_setup_args("nosync",&flags,&val,buf))
       hostdata->no_sync = val;
 
-   if (check_setup_strings("period",&flags,&val,buf))
+   if (check_setup_args("nodma",&flags,&val,buf))
+      hostdata->no_dma = (val == -1) ? 1 : val;
+
+   if (check_setup_args("period",&flags,&val,buf))
       hostdata->default_sx_per = sx_table[round_period((unsigned int)val)].period_ns;
 
-   if (check_setup_strings("disconnect",&flags,&val,buf)) {
+   if (check_setup_args("disconnect",&flags,&val,buf)) {
       if ((val >= DIS_NEVER) && (val <= DIS_ALWAYS))
          hostdata->disconnect = val;
       else
          hostdata->disconnect = DIS_ADAPTIVE;
       }
 
-   if (check_setup_strings("debug",&flags,&val,buf))
+   if (check_setup_args("level2",&flags,&val,buf))
+      hostdata->level2 = val;
+
+   if (check_setup_args("debug",&flags,&val,buf))
       hostdata->args = val & DB_MASK;
 
-   if (check_setup_strings("clock",&flags,&val,buf)) {
+   if (check_setup_args("clock",&flags,&val,buf)) {
       if (val>7 && val<11)
          val = WD33C93_FS_8_10;
       else if (val>11 && val<16)
@@ -1659,13 +1755,13 @@ char buf[32];
       hostdata->clock_freq = val;
       }
 
-   if ((i = check_setup_strings("next",&flags,&val,buf))) {
+   if ((i = check_setup_args("next",&flags,&val,buf))) {
       while (i)
          setup_used[--i] = 1;
       }
 
 #ifdef PROC_INTERFACE
-   if (check_setup_strings("proc",&flags,&val,buf))
+   if (check_setup_args("proc",&flags,&val,buf))
       hostdata->proc = val;
 #endif
 
@@ -1674,23 +1770,23 @@ char buf[32];
    reset_wd33c93(instance);
    sti();
 
-   printk("wd33c93-%d: chip=%s microcode=%02x\n",instance->host_no,
+   printk("wd33c93-%d: chip=%s/%d no_sync=0x%x no_dma=%d",instance->host_no,
          (hostdata->chip==C_WD33C93)?"WD33c93":
          (hostdata->chip==C_WD33C93A)?"WD33c93A":
          (hostdata->chip==C_WD33C93B)?"WD33c93B":"unknown",
-         hostdata->microcode);
-
+         hostdata->microcode,hostdata->no_sync,hostdata->no_dma);
 #ifdef DEBUGGING_ON
-   printk("wd33c93-%d: setup_strings=",instance->host_no);
-   for (i=0; i<MAX_SETUP_STRINGS; i++)
-      printk("%s,",setup_strings[i]);
-   printk("\n");
-   printk("wd33c93-%d: debug_flags = %04x\n",instance->host_no,hostdata->args);
+   printk(" debug_flags=0x%02x\n",hostdata->args);
+#else
+   printk(" debugging=OFF\n");
 #endif
-   printk("wd33c93-%d: driver version %s - %s\n",instance->host_no,
-                     WD33C93_VERSION,WD33C93_DATE);
-   printk("wd33c93-%d: compiled on %s at %s\n",instance->host_no,
-                     __DATE__,__TIME__);
+   printk("           setup_args=");
+   for (i=0; i<MAX_SETUP_ARGS; i++)
+      printk("%s,",setup_args[i]);
+   printk("\n");
+   printk("           Version %s - %s, Compiled %s at %s\n",
+               WD33C93_VERSION,WD33C93_DATE,__DATE__,__TIME__);
+   MOD_INC_USE_COUNT;
 }
 
 
@@ -1708,7 +1804,7 @@ Scsi_Cmnd *cmd;
 int x,i;
 static int stop = 0;
 
-   for (instance=instance_list; instance; instance=instance->next) {
+   for (instance=scsi_hostlist; instance; instance=instance->next) {
       if (instance->host_no == hn)
          break;
       }
@@ -1725,6 +1821,7 @@ static int stop = 0;
  *    period
  *    resync
  *    proc
+ *    nodma
  */
 
    if (in) {
@@ -1757,6 +1854,14 @@ static int stop = 0;
          bp += 5;
          hd->proc = simple_strtoul(bp,NULL,0);
          }
+      else if (!strncmp(bp,"nodma:",6)) {
+         bp += 6;
+         hd->no_dma = simple_strtoul(bp,NULL,0);
+         }
+      else if (!strncmp(bp,"level2:",7)) {
+         bp += 7;
+         hd->level2 = simple_strtoul(bp,NULL,0);
+         }
       return len;
       }
 
@@ -1770,13 +1875,42 @@ static int stop = 0;
       strcat(bp,tbuf);
       }
    if (hd->proc & PR_INFO) {
-      ;
+      sprintf(tbuf,"\nclock_freq=%02x no_sync=%02x no_dma=%d",
+            hd->clock_freq,hd->no_sync,hd->no_dma);
+      strcat(bp,tbuf);
+      strcat(bp,"\nsync_xfer[] =       ");
+      for (x=0; x<7; x++) {
+         sprintf(tbuf,"\t%02x",hd->sync_xfer[x]);
+         strcat(bp,tbuf);
+         }
+      strcat(bp,"\nsync_stat[] =       ");
+      for (x=0; x<7; x++) {
+         sprintf(tbuf,"\t%02x",hd->sync_stat[x]);
+         strcat(bp,tbuf);
+         }
       }
-   if (hd->proc & PR_TOTALS) {
-      sprintf(tbuf,"\n%ld disc_allowed, %ld disc_taken",
-            disc_allowed_total,disc_taken_total);
+#ifdef PROC_STATISTICS
+   if (hd->proc & PR_STATISTICS) {
+      strcat(bp,"\ncommands issued:    ");
+      for (x=0; x<7; x++) {
+         sprintf(tbuf,"\t%ld",hd->cmd_cnt[x]);
+         strcat(bp,tbuf);
+         }
+      strcat(bp,"\ndisconnects allowed:");
+      for (x=0; x<7; x++) {
+         sprintf(tbuf,"\t%ld",hd->disc_allowed_cnt[x]);
+         strcat(bp,tbuf);
+         }
+      strcat(bp,"\ndisconnects done:   ");
+      for (x=0; x<7; x++) {
+         sprintf(tbuf,"\t%ld",hd->disc_done_cnt[x]);
+         strcat(bp,tbuf);
+         }
+      sprintf(tbuf,"\ninterrupts: %ld, DATA_PHASE ints: %ld DMA, %ld PIO",
+            hd->int_cnt,hd->dma_cnt,hd->pio_cnt);
       strcat(bp,tbuf);
       }
+#endif
    if (hd->proc & PR_CONNECTED) {
       strcat(bp,"\nconnected:     ");
       if (hd->connected) {
@@ -1827,12 +1961,11 @@ static int stop = 0;
 
 }
 
-
 #ifdef MODULE
-
-Scsi_Host_Template driver_template = WD33C93;
-
-#include "scsi_module.c"
-
+int init_module(void) { return 0; }
+void cleanup_module(void) {}
+void wd33c93_release(void)
+{
+	MOD_DEC_USE_COUNT;
+}
 #endif
-

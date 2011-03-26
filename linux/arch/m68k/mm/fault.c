@@ -28,15 +28,23 @@ extern void die_if_kernel(char *, struct pt_regs *, long);
 asmlinkage int do_page_fault(struct pt_regs *regs, unsigned long address,
 			      unsigned long error_code)
 {
+	void (*handler)(struct task_struct *,
+			struct vm_area_struct *,
+			unsigned long,
+			int);
+	struct task_struct *tsk = current;
+	struct mm_struct *mm = tsk->mm;
 	struct vm_area_struct * vma;
+	int write;
 
 #ifdef DEBUG
 	printk ("regs->sr=%#x, regs->pc=%#lx, address=%#lx, %ld, %p\n",
 		regs->sr, regs->pc, address, error_code,
-		current->tss.pagedir_v);
+		tsk->mm->pgd);
 #endif
 
-	vma = find_vma(current, address);
+	down(&mm->mmap_sem);
+	vma = find_vma(mm, address);
 	if (!vma)
 	  goto bad_area;
 	if (vma->vm_start <= address)
@@ -59,31 +67,31 @@ asmlinkage int do_page_fault(struct pt_regs *regs, unsigned long address,
  * we can handle it..
  */
 good_area:
-	/*
-	 * was it a write?
-	 */
-	if (error_code & 2) {
-	  if (!(vma->vm_flags & VM_WRITE))
-	    goto bad_area;
-	} else {
-		/* read with protection fault? */
-	  if (error_code & 1)
-	    goto bad_area;
-	  if (!(vma->vm_flags & (VM_READ | VM_EXEC)))
-	    goto bad_area;
+	write = 0;
+	handler = do_no_page;
+	switch (error_code & 3) {
+		default:	/* 3: write, present */
+			handler = do_wp_page;
+			/* fall through */
+		case 2:		/* write, not present */
+			if (!(vma->vm_flags & VM_WRITE))
+				goto bad_area;
+			write++;
+			break;
+		case 1:		/* read, present */
+			goto bad_area;
+		case 0:		/* read, not present */
+			if (!(vma->vm_flags & (VM_READ | VM_EXEC)))
+				goto bad_area;
 	}
-	if (error_code & 1) {
-		do_wp_page(current, vma, address, error_code & 2);
-		return 0;
-	}
-	do_no_page(current, vma, address, error_code & 2);
+	handler(tsk, vma, address, write);
+	up(&mm->mmap_sem);
 
 	/* There seems to be a missing invalidate somewhere in do_no_page.
 	 * Until I found it, this one cures the problem and makes
 	 * 1.2 run on the 68040 (Martin Apel).
 	 */
-	flush_tlb_all();
-
+	flush_tlb_page(vma, address);
 	return 0;
 
 /*
@@ -91,9 +99,10 @@ good_area:
  * Fix it, but check if it's kernel or user first..
  */
 bad_area:
+	up(&mm->mmap_sem);
 	if (user_mode(regs)) {
 		/* User memory access */
-		force_sig (SIGSEGV, current);
+		force_sig (SIGSEGV, tsk);
 		return 1;
 	}
 
@@ -111,3 +120,4 @@ bad_area:
 
 	return 1;
 }
+

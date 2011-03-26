@@ -60,6 +60,7 @@ struct ext2_sb_info {
 	int s_desc_per_block_bits;
 	int s_inode_size;
 	int s_first_ino;
+	int s_byte_swapped;
 };
 
 #endif	/* _LINUX_EXT2_FS_SB */

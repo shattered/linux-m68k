@@ -73,27 +73,30 @@ struct inode_operations ext2_dir_inode_operations = {
 
 int ext2_check_dir_entry (const char * function, struct inode * dir,
 			  struct ext2_dir_entry * de, struct buffer_head * bh,
-			  unsigned long offset)
+			  unsigned long offset, int bs)
 {
 	const char * error_msg = NULL;
+	int rec_len = e_swab (bs, de->rec_len);
 
-	if (de->rec_len < EXT2_DIR_REC_LEN(1))
+	if (rec_len < EXT2_DIR_REC_LEN(1))
 		error_msg = "rec_len is smaller than minimal";
-	else if (de->rec_len % 4 != 0)
+	else if (rec_len % 4 != 0)
 		error_msg = "rec_len % 4 != 0";
-	else if (de->rec_len < EXT2_DIR_REC_LEN(de->name_len))
+	else if (rec_len < EXT2_DIR_REC_LEN(e_swab (bs, de->name_len)))
 		error_msg = "rec_len is too small for name_len";
-	else if (dir && ((char *) de - bh->b_data) + de->rec_len >
+	else if (dir && ((char *) de - bh->b_data) + rec_len >
 		 dir->i_sb->s_blocksize)
 		error_msg = "directory entry across blocks";
-	else if (dir && de->inode > dir->i_sb->u.ext2_sb.s_es->s_inodes_count)
+	else if (dir && e_swab (bs, de->inode) >
+		 e_swab (bs, dir->i_sb->u.ext2_sb.s_es->s_inodes_count))
 		error_msg = "inode out of bounds";
 
 	if (error_msg != NULL)
 		ext2_error (dir->i_sb, function, "bad entry in directory #%lu: %s - "
 			    "offset=%lu, inode=%lu, rec_len=%d, name_len=%d",
-			    dir->i_ino, error_msg, offset, (unsigned long) de->inode,
-			    de->rec_len, de->name_len);
+			    dir->i_ino, error_msg, offset,
+			    (unsigned long) e_swab (bs, de->inode),
+			    rec_len, e_swab (bs, de->name_len));
 	return error_msg == NULL ? 1 : 0;
 }
 
@@ -106,11 +109,12 @@ static int ext2_readdir (struct inode * inode, struct file * filp,
 	struct buffer_head * bh, * tmp, * bha[16];
 	struct ext2_dir_entry * de;
 	struct super_block * sb;
-	int err;
+	int err, bs;
 
 	if (!inode || !S_ISDIR(inode->i_mode))
 		return -EBADF;
 	sb = inode->i_sb;
+	bs = BYTE_SWAP(sb->u.ext2_sb.s_byte_swapped);
 
 	stored = 0;
 	bh = NULL;
@@ -161,9 +165,9 @@ revalidate:
 				 * least that it is non-zero.  A
 				 * failure will be detected in the
 				 * dirent test below. */
-				if (de->rec_len < EXT2_DIR_REC_LEN(1))
+				if (e_swab (bs, de->rec_len) < EXT2_DIR_REC_LEN(1))
 					break;
-				i += de->rec_len;
+				i += e_swab (bs, de->rec_len);
 			}
 			offset = i;
 			filp->f_pos = (filp->f_pos & ~(sb->s_blocksize - 1))
@@ -175,7 +179,7 @@ revalidate:
 		       && offset < sb->s_blocksize) {
 			de = (struct ext2_dir_entry *) (bh->b_data + offset);
 			if (!ext2_check_dir_entry ("ext2_readdir", inode, de,
-						   bh, offset)) {
+						   bh, offset, bs)) {
 				/* On error, skip the f_pos to the
                                    next block. */
 				filp->f_pos = (filp->f_pos & (sb->s_blocksize - 1))
@@ -183,7 +187,7 @@ revalidate:
 				brelse (bh);
 				return stored;
 			}
-			offset += de->rec_len;
+			offset += e_swab (bs, de->rec_len);
 			if (de->inode) {
 				/* We might block in the next section
 				 * if the data destination is
@@ -192,16 +196,21 @@ revalidate:
 				 * not the directory has been modified
 				 * during the copy operation. */
 				unsigned long version;
-				dcache_add(inode, de->name, de->name_len, de->inode);
+				dcache_add(inode, de->name,
+					   e_swab (bs, de->name_len),
+					   e_swab (bs, de->inode));
 				version = inode->i_version;
-				error = filldir(dirent, de->name, de->name_len, filp->f_pos, de->inode);
+				error = filldir(dirent, de->name,
+						e_swab (bs, de->name_len),
+						filp->f_pos,
+						e_swab (bs, de->inode));
 				if (error)
 					break;
 				if (version != inode->i_version)
 					goto revalidate;
 				stored ++;
 			}
-			filp->f_pos += de->rec_len;
+			filp->f_pos += e_swab (bs, de->rec_len);
 		}
 		offset = 0;
 		brelse (bh);

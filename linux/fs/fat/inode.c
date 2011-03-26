@@ -10,6 +10,7 @@
 #define __NO_VERSION__
 #include <linux/module.h>
 
+#include <linux/config.h>
 #include <linux/msdos_fs.h>
 #include <linux/nls.h>
 #include <linux/kernel.h>
@@ -355,15 +356,36 @@ struct super_block *fat_read_super(struct super_block *sb,void *data, int silent
 	if (!error) {
 		MSDOS_SB(sb)->clusters = b->cluster_size ? data_sectors/
 		    b->cluster_size/sector_mult : 0;
+#ifndef CONFIG_ATARI
 		MSDOS_SB(sb)->fat_bits = fat32 ? 32 :
 			(fat ? fat :
 			 (MSDOS_SB(sb)->clusters > MSDOS_FAT12 ? 16 : 12));
+#else
+		/* Atari GEMDOS partitions always have 16-bit fat */
+		MSDOS_SB(sb)->fat_bits = fat ? fat : 16;
+		/* If more clusters than fat entries in 16-bit fat, we assume
+		 * it's a real MSDOS partition with 12-bit fat.
+		 */
+		if (MSDOS_SB(sb)->clusters+2 > MSDOS_SB(sb)->
+		    fat_length*SECTOR_SIZE*8/MSDOS_SB(sb)->fat_bits)
+			MSDOS_SB(sb)->fat_bits = 12;
+		/* if its a floppy disk --> 12bit fat */
+		if (MAJOR(sb->s_dev) == FLOPPY_MAJOR)
+			MSDOS_SB(sb)->fat_bits = 12;
+#endif
 		fat_clusters = MSDOS_SB(sb)->fat_length*SECTOR_SIZE*8/
 		    MSDOS_SB(sb)->fat_bits;
 		error = !MSDOS_SB(sb)->fats || (MSDOS_SB(sb)->dir_entries &
 		    (MSDOS_DPS-1)) || MSDOS_SB(sb)->clusters+2 > fat_clusters+
 		    MSDOS_MAX_EXTRA || (logical_sector_size & (SECTOR_SIZE-1))
+#ifndef CONFIG_ATARI
 		    || !b->secs_track || !b->heads;
+#else
+		    /* secs_track and heads may be arbitrary on GEMDOS
+		       partitions, it depends on partitioning software
+		       used.  */
+		    /*|| !b->secs_track || !b->heads */;
+#endif
 	}
 	fat_brelse(sb, bh);
 	/*

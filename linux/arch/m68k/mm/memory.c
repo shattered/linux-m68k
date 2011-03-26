@@ -10,13 +10,13 @@
 #include <linux/types.h>
 #include <linux/malloc.h>
 
+#include <asm/setup.h>
 #include <asm/segment.h>
 #include <asm/page.h>
 #include <asm/pgtable.h>
 #include <asm/system.h>
 #include <asm/traps.h>
 #include <asm/amigahw.h>
-#include <asm/bootinfo.h>
 
 extern pte_t *kernel_page_table (unsigned long *memavailp);
 
@@ -250,6 +250,34 @@ void free_kpointer_table (pmd_t *pmdp)
 	}
 }
 
+static unsigned long transp_transl_matches( unsigned long regval,
+					    unsigned long vaddr )
+{
+    unsigned long base, mask;
+
+    /* enabled? */
+    if (!(regval & 0x8000))
+	return( 0 );
+
+    if (CPU_IS_030) {
+	/* function code match? */
+	base = (regval >> 4) & 7;
+	mask = ~(regval & 7);
+	if ((SUPER_DATA & mask) != (base & mask))
+	    return( 0 );
+    }
+    else {
+	/* must not be user-only */
+	if ((regval & 0x6000) == 0)
+	    return( 0 );
+    }
+
+    /* address match? */
+    base = regval & 0xff000000;
+    mask = ~((regval << 8) & 0xff000000);
+    return( (vaddr & mask) == (base & mask) );
+}
+
 /*
  * The following two routines map from a physical address to a kernel
  * virtual address and vice versa.
@@ -272,10 +300,39 @@ unsigned long mm_vtop (unsigned long vaddr)
 			offset += boot_info.memory[i].size;
 	}
 
-	/* not in one of the memory chunks; get the actual
-	 * physical address from the MMU.
-	 */
-	if (m68k_is040or060 == 6) {
+	/* not in one of the memory chunks; test for applying transparent
+	 * translation */
+
+	if (CPU_IS_030) {
+	    unsigned long ttreg;
+	    register unsigned long *ttregptr __asm__( "a2" ) = &ttreg;
+
+	    asm volatile( ".long 0xf0120a00;" /* pmove %/tt0,%a0@ */
+			  : "=g" (ttreg) : "a" (ttregptr) );
+	    if (transp_transl_matches( ttreg, vaddr ))
+		return vaddr;
+
+	    asm volatile( ".long 0xf0120a00" /* pmove %/tt1,%a0@ */
+			  : "=g" (ttreg) : "a" (ttregptr) );
+	    if (transp_transl_matches( ttreg, vaddr ))
+		return vaddr;
+	}
+	else if (CPU_IS_040_OR_060) {
+	    register unsigned long ttreg __asm__( "d0" );
+	    
+	    asm volatile( ".long 0x4e7a0006" /* movec %dtt0,%d0 */
+			  : "=d" (ttreg) );
+	    if (transp_transl_matches( ttreg, vaddr ))
+		return vaddr;
+	    asm volatile( ".long 0x4e7a0007" /* movec %dtt1,%d0 */
+			  : "=d" (ttreg) );
+	    if (transp_transl_matches( ttreg, vaddr ))
+		return vaddr;
+	}
+
+	/* no match, too, so get the actual physical address from the MMU. */
+
+	if (CPU_IS_060) {
 	  unsigned long fs = get_fs();
 	  unsigned long  paddr;
 
@@ -294,7 +351,7 @@ unsigned long mm_vtop (unsigned long vaddr)
 
 	  return paddr;
 
-	} else if (m68k_is040or060 == 4) {
+	} else if (CPU_IS_040) {
 	  unsigned long mmusr;
 	  unsigned long fs = get_fs();
 
@@ -414,17 +471,18 @@ unsigned long mm_ptov (unsigned long paddr)
 
 /* push and invalidate page in both caches */
 #define	pushcl040(paddr) do { push040((paddr));\
-			      if (m68k_is040or060 == 6) clear040((paddr));\
+			      if (CPU_IS_060) clear040((paddr));\
 			 } while(0)
 
 /* push page in both caches, invalidate in i-cache */
 #define	pushcli040(paddr) do { push040((paddr));\
-			       if (m68k_is040or060 == 6) cleari040((paddr));\
+			       if (CPU_IS_060) cleari040((paddr));\
 			  } while(0)
 
 /* push page defined by virtual address in both caches */
 #define	pushv040(vaddr) __asm__ __volatile__ ("movel %0,%/a0\n\t"\
 					      /* ptestr (a0) */\
+					      "nop\n\t"\
 					      ".word 0xf568\n\t"\
 					      /* movec mmusr,d0 */\
 					      ".long 0x4e7a0805\n\t"\
@@ -474,13 +532,30 @@ unsigned long mm_ptov (unsigned long paddr)
 
 void cache_clear (unsigned long paddr, int len)
 {
-    if (m68k_is040or060) {
-	/* ++roman: There have been too many problems with the CINV, it seems
-	 * to break the cache maintenance of DMAing drivers. I don't expect
-	 * too much overhead by using CPUSH instead.
+    if (CPU_IS_040_OR_060) {
+	/*
+	 * cwe need special treatment for the first page, in case it
+	 * is not page-aligned.
 	 */
-	while (len > PAGE_SIZE) {
+	if (paddr & (PAGE_SIZE - 1)){
 	    pushcl040(paddr);
+	    if (len <= PAGE_SIZE){
+		if (((paddr + len - 1) ^ paddr) & PAGE_MASK) {
+		    pushcl040(paddr + len - 1);
+		}
+		return;
+	    }else{
+		len -=PAGE_SIZE;
+		paddr += PAGE_SIZE;
+	    }
+	}
+		
+	while (len > PAGE_SIZE) {
+#if 0
+	    pushcl040(paddr);
+#else
+	    clear040(paddr);
+#endif
 	    len -= PAGE_SIZE;
 	    paddr += PAGE_SIZE;
 	}
@@ -492,22 +567,6 @@ void cache_clear (unsigned long paddr, int len)
 	    }
 	}
     }
-#if 0
-	/* on 68040, invalidate cache lines for pages in the range */
-	while (len > PAGE_SIZE) {
-	    clear040(paddr);
-	    len -= PAGE_SIZE;
-	    paddr += PAGE_SIZE;
-	    }
-	if (len > 0) {
-	    /* 0 < len <= PAGE_SIZE */
-	    clear040(paddr);
-	    if (((paddr + len - 1) / PAGE_SIZE) != (paddr / PAGE_SIZE)) {
-		/* a page boundary gets crossed at the end */
-		clear040(paddr + len - 1);
-		}
-	    }
-#endif
     else /* 68030 or 68020 */
 	asm volatile ("movec %/cacr,%/d0\n\t"
 		      "oriw %0,%/d0\n\t"
@@ -526,7 +585,7 @@ void cache_clear (unsigned long paddr, int len)
 
 void cache_push (unsigned long paddr, int len)
 {
-    if (m68k_is040or060) {
+    if (CPU_IS_040_OR_060) {
 	/*
          * on 68040 or 68060, push cache lines for pages in the range;
 	 * on the '040 this also invalidates the pushed lines, but not on
@@ -539,9 +598,6 @@ void cache_push (unsigned long paddr, int len)
 	    }
 	if (len > 0) {
 	    pushcli040(paddr);
-#if 0
-	    if (((paddr + len - 1) / PAGE_SIZE) != (paddr / PAGE_SIZE)) {
-#endif
 	    if (((paddr + len - 1) ^ paddr) & PAGE_MASK) {
 		/* a page boundary gets crossed at the end */
 		pushcli040(paddr + len - 1);
@@ -578,7 +634,7 @@ void cache_push (unsigned long paddr, int len)
 
 void cache_push_v (unsigned long vaddr, int len)
 {
-    if (m68k_is040or060 == 4) {
+    if (CPU_IS_040) {
 	/* on 68040, push cache lines for pages in the range */
 	while (len > PAGE_SIZE) {
 	    pushv040(vaddr);
@@ -587,16 +643,13 @@ void cache_push_v (unsigned long vaddr, int len)
 	    }
 	if (len > 0) {
 	    pushv040(vaddr);
-#if 0
-	    if (((vaddr + len - 1) / PAGE_SIZE) != (vaddr / PAGE_SIZE)) {
-#endif
 	    if (((vaddr + len - 1) ^ vaddr) & PAGE_MASK) {
 		/* a page boundary gets crossed at the end */
 		pushv040(vaddr + len - 1);
 		}
 	    }
 	}
-    else if (m68k_is040or060 == 6) {
+    else if (CPU_IS_060) {
 	/* on 68040, push cache lines for pages in the range */
 	while (len > PAGE_SIZE) {
 	    pushv060(vaddr);
@@ -670,7 +723,7 @@ unsigned long kernel_map(unsigned long paddr, unsigned long size,
 	 * mapped... */
 	size = (size + STEP_SIZE - 1) & ~(STEP_SIZE-1);
 
-	if (m68k_is040or060) {
+	if (CPU_IS_040_OR_060) {
 		prot = _PAGE_PRESENT | _PAGE_GLOBAL040;
 		switch( nocacheflag ) {
 		  case KERNELMAP_FULL_CACHING:
@@ -697,7 +750,7 @@ unsigned long kernel_map(unsigned long paddr, unsigned long size,
 	if (pgd_present(*page_dir)) {
 		kpointerp = (pmd_t *)pgd_page(*page_dir);
 		pindex = (vaddr >> 18) & 0x7f;
-		if (pindex != 0 && m68k_is040or060) {
+		if (pindex != 0 && CPU_IS_040_OR_060) {
 			if (pmd_present(*kpointerp))
 				ktablep = (pte_t *)pmd_page(*kpointerp);
 			else {
@@ -727,7 +780,7 @@ unsigned long kernel_map(unsigned long paddr, unsigned long size,
 			pindex = 0;
 		}
 
-		if (m68k_is040or060) {
+		if (CPU_IS_040_OR_060) {
 			int i;
 			unsigned long ktable;
 
@@ -838,7 +891,7 @@ void kernel_set_cachemode( unsigned long address, unsigned long size,
 	pgd_t *dir = pgd_offset_k( address );
 	unsigned long end = address + size;
 	
-	if (m68k_is040or060) {
+	if (CPU_IS_040_OR_060) {
 		switch( cmode ) {
 		  case KERNELMAP_FULL_CACHING:
 			cmode = _PAGE_CACHE040;

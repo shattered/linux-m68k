@@ -13,26 +13,23 @@
 # Copyright (C) 1994 by Hamish Macdonald
 #
 
-# override top level makefile
-ifdef CONFIG_KERNEL_ELF
-AS	= as -m68020
-LD	= ld -m m68kelf
-CC	:= $(CC)
-# set up for cross compiling
+# test for cross compiling
 COMPILE_ARCH = $(shell uname -m)
+
+# override top level makefile
+AS += -m68020
+ifdef CONFIG_KERNEL_ELF
+LD += -m m68kelf
 ifneq ($(COMPILE_ARCH),$(ARCH))
-	CROSSDIR=/usr/$(ARCH)-linux
-	CC := $(CROSSDIR)/$(CC)
-	AS := $(CROSSDIR)/$(AS)
-	LD := $(CROSSDIR)/$(LD)
-	AR := $(CROSSDIR)/$(AR)
-	NM := $(CROSSDIR)/$(NM)
-	STRIP := $(CROSSDIR)/$(STRIP)
+	# prefix for cross-compiling binaries
+	CROSS_COMPILE = m68k-linux-
 endif
 else
-AS	= /usr/m68k-linuxaout/bin/as -m68020 
-CC	:= $(CC) -pipe -b m68k-linuxaout
-LD	= ld -m m68klinux
+LD += -m m68klinux
+ifneq ($(COMPILE_ARCH),$(ARCH))
+	# prefix for cross-compiling binaries
+	CROSS_COMPILE = m68k-linuxaout-
+endif
 endif
 
 #
@@ -50,12 +47,20 @@ LINKFLAGS = -Ttext 0x1000
 else
 LINKFLAGS = -qmagic -Ttext 0xFE0
 endif
+
 CFLAGS := $(CFLAGS) -pipe
+
+ifdef CONFIG_OPTIMIZE_040
+CFLAGS := $(CFLAGS) -m68040
+endif
+
+ifdef CONFIG_OPTIMIZE_060
+CFLAGS := $(CFLAGS) -m68020-40 -Wa,-m68060
+endif
 
 HEAD := arch/m68k/kernel/head.o
 
 SUBDIRS += arch/m68k/kernel arch/m68k/mm arch/m68k/console arch/m68k/lib
-#SUBDIRS += arch/m68k/kernel arch/m68k/mm arch/m68k/lib
 ARCHIVES := arch/m68k/kernel/kernel.o arch/m68k/mm/mm.o $(ARCHIVES)
 LIBS += arch/m68k/lib/lib.a
 
@@ -77,12 +82,12 @@ endif
 # add in console.a after {amiga,atari}.o that need it
 ARCHIVES := $(ARCHIVES) arch/m68k/console/console.a
 
-ifdef CONFIG_FPSP_040
+ifdef CONFIG_M68040
 ARCHIVES := $(ARCHIVES) arch/m68k/fpsp040/fpsp.o
 SUBDIRS := $(SUBDIRS) arch/m68k/fpsp040
 endif
 
-ifdef CONFIG_IFPSP_060
+ifdef CONFIG_M68060
 ARCHIVES := $(ARCHIVES) arch/m68k/ifpsp060/ifpsp.o
 SUBDIRS := $(SUBDIRS) arch/m68k/ifpsp060
 endif
@@ -95,6 +100,10 @@ lilo:	vmlinux
 	cat vmlinux > $(INSTALL_PATH)/vmlinux
 	cp System.map $(INSTALL_PATH)/System.map
 	if [ -x /sbin/lilo ]; then /sbin/lilo; else /etc/lilo/install; fi
+
+zImage compressed: vmlinux.gz
+
+vmlinux.gz: vmlinux
 
 bootstrap:
 	@$(MAKEBOOT) bootstrap

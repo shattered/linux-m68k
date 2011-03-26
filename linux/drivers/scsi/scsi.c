@@ -64,7 +64,7 @@
 #undef USE_STATIC_SCSI_MEMORY
 
 /*
-static const char RCSid[] = "$Header: /usr/src/linux/kernel/blk_drv/scsi/RCS/scsi.c,v 1.5 1993/09/24 12:45:18 drew Exp drew $";
+static const char RCSid[] = "$Header: /root/linux/drivers/scsi/RCS/scsi.c,v 1.6 1996/04/17 23:39:23 root Exp $";
 */
 
 
@@ -89,7 +89,7 @@ const unsigned char scsi_command_size[8] = { 6, 10, 10, 12, 12, 12, 10, 10 };
 #endif
 
 static void scsi_done (Scsi_Cmnd *SCpnt);
-static int update_timeout (Scsi_Cmnd *, int);
+int scsi_update_timeout (Scsi_Cmnd *, int);
 static void print_inquiry(unsigned char *data);
 static void scsi_times_out (Scsi_Cmnd * SCpnt);
 static int scan_scsis_single (int channel,int dev,int lun,int * max_scsi_dev ,
@@ -887,7 +887,7 @@ static void scsi_times_out (Scsi_Cmnd * SCpnt)
 	SCpnt->internal_timeout |= IN_RESET2;
         scsi_reset (SCpnt,
 		    SCSI_RESET_ASYNCHRONOUS | SCSI_RESET_SUGGEST_BUS_RESET);
-        return;
+	return;
     case IN_RESET2:
     case (IN_ABORT | IN_RESET2):
 	/* Obviously the bus reset didn't work.
@@ -1253,7 +1253,7 @@ inline void internal_cmnd (Scsi_Cmnd * SCpnt)
     }
     restore_flags(flags);
     
-    update_timeout(SCpnt, SCpnt->timeout_per_command);
+    scsi_update_timeout(SCpnt, SCpnt->timeout_per_command);
     
     /*
      * We will use a queued command if possible, otherwise we will emulate the
@@ -1318,7 +1318,7 @@ static void scsi_request_sense (Scsi_Cmnd * SCpnt)
     save_flags(flags);
     cli();
     SCpnt->flags |= WAS_SENSE | ASKED_FOR_SENSE;
-    update_timeout(SCpnt, SENSE_TIMEOUT);
+    scsi_update_timeout(SCpnt, SENSE_TIMEOUT);
     restore_flags(flags);
     
     
@@ -1535,7 +1535,7 @@ static void scsi_done (Scsi_Cmnd * SCpnt)
     struct Scsi_Host * host = SCpnt->host;
     int result = SCpnt->result;
     SCpnt->serial_number = 0;
-    oldto = update_timeout(SCpnt, 0);
+    oldto = scsi_update_timeout(SCpnt, 0);
     
 #ifdef DEBUG_TIMEOUT
     if(result) printk("Non-zero result in scsi_done %x %d:%d\n",
@@ -1615,7 +1615,7 @@ static void scsi_done (Scsi_Cmnd * SCpnt)
 #ifdef DEBUG
 			printk("NO SENSE.  status = REDO\n");
 #endif
-			update_timeout(SCpnt, oldto);
+			scsi_update_timeout(SCpnt, oldto);
 			status = REDO;
 			break;
 		    case SUGGEST_IS_OK:
@@ -1662,7 +1662,7 @@ static void scsi_done (Scsi_Cmnd * SCpnt)
 		switch (check_sense(SCpnt))
 		{
 		case 0:
-		    update_timeout(SCpnt, oldto);
+		    scsi_update_timeout(SCpnt, oldto);
 		    status = REDO;
 		    break;
 		case SUGGEST_REMAP:
@@ -1691,7 +1691,7 @@ static void scsi_done (Scsi_Cmnd * SCpnt)
 		
 	    case BUSY:
 	    case QUEUE_FULL:
-		update_timeout(SCpnt, oldto);
+		scsi_update_timeout(SCpnt, oldto);
 		status = REDO;
 		break;
 		
@@ -1776,7 +1776,7 @@ static void scsi_done (Scsi_Cmnd * SCpnt)
 	   status_byte(result) == CHECK_CONDITION) {
 	    switch (check_sense(SCpnt)) {
 	    case 0:
-		update_timeout(SCpnt, oldto);
+		scsi_update_timeout(SCpnt, oldto);
 		status = REDO;
 		break;
 	    case SUGGEST_REMAP:
@@ -1931,7 +1931,7 @@ int scsi_abort (Scsi_Cmnd * SCpnt, int why)
 	else
 	{
 	    SCpnt->internal_timeout |= IN_ABORT;
-	    oldto = update_timeout(SCpnt, ABORT_TIMEOUT);
+	    oldto = scsi_update_timeout(SCpnt, ABORT_TIMEOUT);
 	    
 	    if ((SCpnt->flags & IS_RESETTING) && SCpnt->device->soft_reset) {
 		/* OK, this command must have died when we did the
@@ -1945,7 +1945,7 @@ int scsi_abort (Scsi_Cmnd * SCpnt, int why)
 	    restore_flags(flags);
 	    if (!host->host_busy) {
 		SCpnt->internal_timeout &= ~IN_ABORT;
-		update_timeout(SCpnt, oldto);
+		scsi_update_timeout(SCpnt, oldto);
 		return 0;
 	    }
 	    printk("scsi : aborting command due to timeout : pid %lu, scsi%d,"
@@ -1978,7 +1978,7 @@ int scsi_abort (Scsi_Cmnd * SCpnt, int why)
 		    } else {
 			SCpnt->flags |= WAS_TIMEDOUT;
 			oldto = SCpnt->timeout_per_command;
-			update_timeout(SCpnt, oldto);
+			scsi_update_timeout(SCpnt, oldto);
 		    }
 		    restore_flags(flags);
 		}
@@ -1987,7 +1987,7 @@ int scsi_abort (Scsi_Cmnd * SCpnt, int why)
 		if(why != DID_TIME_OUT) {
 		    save_flags(flags);
 		    cli();
-		    update_timeout(SCpnt, oldto);
+		    scsi_update_timeout(SCpnt, oldto);
 		    restore_flags(flags);
 		}
 		return 0;
@@ -1999,7 +1999,7 @@ int scsi_abort (Scsi_Cmnd * SCpnt, int why)
                  return 0;
 	    case SCSI_ABORT_NOT_RUNNING:
 		SCpnt->internal_timeout &= ~IN_ABORT;
-		update_timeout(SCpnt, 0);
+		scsi_update_timeout(SCpnt, 0);
 		return 0;
 	    case SCSI_ABORT_ERROR:
 	    default:
@@ -2122,7 +2122,7 @@ int scsi_reset (Scsi_Cmnd * SCpnt, unsigned int reset_flags)
 	else
 	{
 	    SCpnt->internal_timeout |= IN_RESET;
-	    update_timeout(SCpnt, RESET_TIMEOUT);
+	    scsi_update_timeout(SCpnt, RESET_TIMEOUT);
 	    
 	    if (host->host_busy)
 	    {
@@ -2235,7 +2235,7 @@ int scsi_reset (Scsi_Cmnd * SCpnt, unsigned int reset_flags)
                         if(SCpnt1->request.rq_status != RQ_INACTIVE
                            && SCpnt1 != SCpnt 
                            && SCpnt1->channel == SCpnt->channel)
-                            scsi_request_sense (SCpnt);
+                            scsi_request_sense (SCpnt1);
                         SCpnt1 = SCpnt1->next;
                     }
                 }
@@ -2249,7 +2249,7 @@ int scsi_reset (Scsi_Cmnd * SCpnt, unsigned int reset_flags)
 		save_flags(flags);
 		cli();
 		SCpnt->internal_timeout &= ~(IN_RESET|IN_RESET2|IN_RESET3);
-		update_timeout(SCpnt, 0);
+		scsi_update_timeout(SCpnt, 0);
 		restore_flags(flags);
 		/* If you snooze, you lose... */
 	    case SCSI_RESET_ERROR:
@@ -2277,7 +2277,7 @@ static void scsi_main_timeout(void)
     save_flags(flags);
     cli();
 
-    update_timeout(NULL, 0);
+    scsi_update_timeout(NULL, 0);
 
     /*
      * Find all timers such that they have 0 or negative (shouldn't happen)
@@ -2317,7 +2317,7 @@ static void scsi_main_timeout(void)
  * set the timer, we want to take this value into account.
  */
 
-static int update_timeout(Scsi_Cmnd * SCset, int timeout)
+int scsi_update_timeout(Scsi_Cmnd * SCset, int timeout)
 {
     unsigned int least, used;
     unsigned int oldto;

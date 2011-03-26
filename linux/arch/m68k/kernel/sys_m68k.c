@@ -15,8 +15,10 @@
 #include <linux/stat.h>
 #include <linux/mman.h>
 
+#include <asm/setup.h>
 #include <asm/segment.h>
 #include <asm/cachectl.h>
+#include <asm/traps.h>
 
 /*
  * sys_pipe() is the normal C calling standard for creating
@@ -184,33 +186,26 @@ asmlinkage int sys_ioperm(unsigned long from, unsigned long num, int on)
   return -ENOSYS;
 }
 
-/* Convert virtual address VADDR to physical address PADDR, recording
-   in VALID whether the virtual address is actually mapped.  */
-#define virt_to_phys_040(vaddr, paddr, valid)				\
-{									\
+/* Convert virtual address VADDR to physical address PADDR */
+#define virt_to_phys_040(vaddr)						\
+({									\
   register unsigned long _tmp1 __asm__ ("a0") = (vaddr);		\
   register unsigned long _tmp2 __asm__ ("d0");				\
-  unsigned long _mmusr;							\
+  unsigned long _mmusr, _paddr;						\
 									\
   __asm__ __volatile__ (".word 0xf568 /* ptestr (%1) */\n\t"		\
 			".long 0x4e7a0805 /* movec %%mmusr,%0 */"	\
 			: "=d" (_tmp2)					\
 			: "a" (_tmp1));					\
   _mmusr = _tmp2;							\
-  if (0 /* XXX _mmusr & MMU_?_040 */)					\
-    (valid) = 0;							\
-  else									\
-    {									\
-      (valid) = 1;							\
-      (paddr) = _mmusr & ~0xfff;					\
-    }									\
-}
+  _paddr = (_mmusr & MMU_R_040) ? (_mmusr & PAGE_MASK) : 0;		\
+  _paddr;								\
+})
 
 static inline int
 cache_flush_040 (unsigned long addr, int scope, int cache, unsigned long len)
 {
-  unsigned long paddr;
-  int valid;
+  unsigned long paddr, i;
 
   switch (scope)
     {
@@ -235,17 +230,31 @@ cache_flush_040 (unsigned long addr, int scope, int cache, unsigned long len)
       break;
 
     case FLUSH_SCOPE_LINE:
-      len >>= 4;
-      for (;;)
-	{
-	  virt_to_phys_040 (addr, paddr, valid);
-	  if (valid)
-	    break;
-	  if (len <= PAGE_SIZE / 16)
-	    return 0;
-	  len -= PAGE_SIZE / 16;
-	  addr += PAGE_SIZE;
-	}
+      /* Find the physical address of the first mapped page in the
+	 address range.  */
+      if ((paddr = virt_to_phys_040(addr))) {
+        paddr += addr & ~(PAGE_MASK | 15);
+        len = (len + (addr & 15) + 15) >> 4;
+      } else {
+	unsigned long tmp = PAGE_SIZE - (addr & ~PAGE_MASK);
+
+	if (len <= tmp)
+	  return 0;
+	addr += tmp;
+	len -= tmp;
+	tmp = PAGE_SIZE;
+	for (;;)
+	  {
+	    if ((paddr = virt_to_phys_040(addr)))
+	      break;
+	    if (len <= tmp)
+	      return 0;
+	    addr += tmp;
+	    len -= tmp;
+	  }
+	len = (len + 15) >> 4;
+      }
+      i = (PAGE_SIZE - (paddr & ~PAGE_MASK)) >> 4;
       while (len--)
 	{
 	  register unsigned long tmp __asm__ ("a0") = paddr;
@@ -268,37 +277,38 @@ cache_flush_040 (unsigned long addr, int scope, int cache, unsigned long len)
 				    : : "a" (paddr));
 	      break;
 	    }
-	  addr += 16;
-	  if (len)
+	  if (!--i && len)
 	    {
-	      if ((addr & (PAGE_SIZE-1)) < 16)
+	      /*
+	       * No need to align as this is already done by
+	       * virt_to_phys_040().
+	       */
+	      addr += PAGE_SIZE;
+	      i = PAGE_SIZE / 16;
+	      /* Recompute physical address when crossing a page
+	         boundary. */
+	      for (;;)
 		{
-		  /* Recompute physical address when crossing a page
-		     boundary. */
-		  for (;;)
-		    {
-		      virt_to_phys_040 (addr, paddr, valid);
-		      if (valid)
-			break;
-		      if (len <= PAGE_SIZE / 16)
-			return 0;
-		      len -= PAGE_SIZE / 16;
-		      addr += PAGE_SIZE;
-		    }
+		  if ((paddr = virt_to_phys_040(addr)))
+		    break;
+		  if (len <= i)
+		    return 0;
+		  len -= i;
+		  addr += PAGE_SIZE;
 		}
-	      else
-		paddr += 16;
 	    }
+	  else
+	    paddr += 16;
 	}
       break;
 
     default:
     case FLUSH_SCOPE_PAGE:
+      len += (addr & ~PAGE_MASK) + (PAGE_SIZE - 1);
       for (len >>= PAGE_SHIFT; len--; addr += PAGE_SIZE)
 	{
 	  register unsigned long tmp __asm__ ("a0");
-	  virt_to_phys_040 (addr, paddr, valid);
-	  if (!valid)
+	  if (!(paddr = virt_to_phys_040(addr)))
 	    continue;
 	  tmp = paddr;
 	  switch (cache)
@@ -326,22 +336,20 @@ cache_flush_040 (unsigned long addr, int scope, int cache, unsigned long len)
   return 0;
 }
 
-#define virt_to_phys_060(vaddr, paddr, valid)		\
-{							\
+#define virt_to_phys_060(vaddr)				\
+({							\
   register unsigned long _tmp __asm__ ("a0") = (vaddr);	\
 							\
   __asm__ __volatile__ (".word 0xf5c8 /* plpar (%1) */"	\
 			: "=a" (_tmp)			\
 			: "0" (_tmp));			\
-  (valid) = 1; /* XXX */				\
-  (paddr) = _tmp;					\
-}
+ (_tmp);						\
+})
 
 static inline int
 cache_flush_060 (unsigned long addr, int scope, int cache, unsigned long len)
 {
-  unsigned long paddr;
-  int valid;
+  unsigned long paddr, i;
 
   switch (scope)
     {
@@ -365,17 +373,30 @@ cache_flush_060 (unsigned long addr, int scope, int cache, unsigned long len)
       break;
 
     case FLUSH_SCOPE_LINE:
-      len >>= 4;
-      for (;;)
-	{
-	  virt_to_phys_060 (addr, paddr, valid);
-	  if (valid)
-	    break;
-	  if (len <= PAGE_SIZE / 16)
-	    return 0;
-	  len -= PAGE_SIZE / 16;
-	  addr += PAGE_SIZE;
-	}
+      /* Find the physical address of the first mapped page in the
+	 address range.  */
+      len += addr & 15;
+      addr &= -16;
+      if (!(paddr = virt_to_phys_060(addr))) {
+	unsigned long tmp = PAGE_SIZE - (addr & ~PAGE_MASK);
+
+	if (len <= tmp)
+	  return 0;
+	addr += tmp;
+	len -= tmp;
+	tmp = PAGE_SIZE;
+	for (;;)
+	  {
+	    if ((paddr = virt_to_phys_060(addr)))
+	      break;
+	    if (len <= tmp)
+	      return 0;
+	    addr += tmp;
+	    len -= tmp;
+	  }
+      }
+      len = (len + 15) >> 4;
+      i = (PAGE_SIZE - (paddr & ~PAGE_MASK)) >> 4;
       while (len--)
 	{
 	  register unsigned long tmp __asm__ ("a0") = paddr;
@@ -398,37 +419,41 @@ cache_flush_060 (unsigned long addr, int scope, int cache, unsigned long len)
 				    : : "a" (paddr));
 	      break;
 	    }
-	  addr += 16;
-	  if (len)
+	  if (!--i && len)
 	    {
-	      if ((addr & (PAGE_SIZE-1)) < 16)
-		{
-		  /* Recompute the physical address when crossing a
-		     page boundary.  */
-		  for (;;)
-		    {
-		      virt_to_phys_060 (addr, paddr, valid);
-		      if (valid)
-			break;
-		      if (len <= PAGE_SIZE / 16)
-			return 0;
-		      len -= PAGE_SIZE / 16;
-		      addr += PAGE_SIZE;
-		    }
-		}
-	      else
-		paddr += 16;
+	      /*
+	       * We just want to jump to the first cache line
+	       * in the next page.
+	       */
+	      addr += PAGE_SIZE;
+	      addr &= PAGE_MASK;
+	      i = PAGE_SIZE / 16;
+	      /* Recompute physical address when crossing a page
+	         boundary. */
+	      for (;;)
+	        {
+	          if ((paddr = virt_to_phys_060(addr)))
+	            break;
+	          if (len <= i)
+	            return 0;
+	          len -= i;
+	          addr += PAGE_SIZE;
+	        }
 	    }
+	  else
+	    paddr += 16;
 	}
       break;
 
     default:
     case FLUSH_SCOPE_PAGE:
+      len += (addr & ~PAGE_MASK) + (PAGE_SIZE - 1);
+      addr &= PAGE_MASK;	/* Workaround for bug in some
+				   revisions of the 68060 */
       for (len >>= PAGE_SHIFT; len--; addr += PAGE_SIZE)
 	{
 	  register unsigned long tmp __asm__ ("a0");
-	  virt_to_phys_060 (addr, paddr, valid);
-	  if (!valid)
+	  if (!(paddr = virt_to_phys_060(addr)))
 	    continue;
 	  tmp = paddr;
 	  switch (cache)
@@ -476,30 +501,44 @@ sys_cacheflush (unsigned long addr, int scope, int cache, unsigned long len)
     {
       /* Verify that the specified address region actually belongs to
 	 this process.  */
-      vma = find_vma (current, addr);
+      vma = find_vma (current->mm, addr);
       if (vma == NULL || addr < vma->vm_start || addr + len > vma->vm_end)
 	return -EINVAL;
     }
 
-  switch (m68k_is040or060)
-    {
-    default: /* 030 */
-      /* Always flush the whole cache, everything else would not be
-	 worth the hassle.  */
-      __asm__ __volatile__
-	("movec %%cacr, %%d0\n\t"
-	 "or %0, %%d0\n\t"
-	 "movec %%d0, %%cacr"
-	 : /* no outputs */
-	 : "di" ((cache & FLUSH_CACHE_INSN ? 8 : 0)
-		 | (cache & FLUSH_CACHE_DATA ? 0x800 : 0))
-	 : "d0");
-      return 0;
-
-    case 4: /* 040 */
-      return cache_flush_040 (addr, scope, cache, len);
-
-    case 6: /* 060 */
-      return cache_flush_060 (addr, scope, cache, len);
-    }
+  if (CPU_IS_020_OR_030) {
+    if (scope == FLUSH_SCOPE_LINE && len < 256)
+      {
+	unsigned long cacr;
+	__asm__ ("movec %%cacr, %0" : "=r" (cacr));
+	if (cache & FLUSH_CACHE_INSN)
+	  cacr |= 4;
+	if (cache & FLUSH_CACHE_DATA)
+	  cacr |= 0x400;
+	len >>= 2;
+	while (len--)
+	  {
+	    __asm__ __volatile__ ("movec %1, %%caar\n\t"
+				  "movec %0, %%cacr"
+				  : /* no outputs */
+				  : "r" (cacr), "r" (addr));
+	    addr += 4;
+	  }
+      }
+    else
+      {
+	/* Flush the whole cache, even if page granularity is requested.  */
+	unsigned long cacr;
+	__asm__ ("movec %%cacr, %0" : "=r" (cacr));
+	if (cache & FLUSH_CACHE_INSN)
+	  cacr |= 8;
+	if (cache & FLUSH_CACHE_DATA)
+	  cacr |= 0x800;
+	__asm__ __volatile__ ("movec %0, %%cacr" : : "r" (cacr));
+      }
+    return 0;
+  } else if (CPU_IS_040)
+    return cache_flush_040 (addr, scope, cache, len);
+  else if (CPU_IS_060)
+    return cache_flush_060 (addr, scope, cache, len);
 }

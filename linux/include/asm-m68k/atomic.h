@@ -14,28 +14,28 @@ typedef int atomic_t;
 
 static __inline__ void atomic_add(atomic_t i, atomic_t *v)
 {
-	__asm__ __volatile__("addl %1,%0" : : "m" (*v), "id" (i));
+	__asm__ __volatile__("addl %1,%0" : "=m" (*v) : "id" (i), "0" (*v));
 }
 
 static __inline__ void atomic_sub(atomic_t i, atomic_t *v)
 {
-	__asm__ __volatile__("subl %1,%0" : : "m" (*v), "id" (i));
+	__asm__ __volatile__("subl %1,%0" : "=m" (*v) : "id" (i), "0" (*v));
 }
 
 static __inline__ void atomic_inc(atomic_t *v)
 {
-	__asm__ __volatile__("addql #1,%0" : : "m" (*v));
+	__asm__ __volatile__("addql #1,%0" : "=m" (*v): "0" (*v));
 }
 
 static __inline__ void atomic_dec(atomic_t *v)
 {
-	__asm__ __volatile__("subql #1,%0" : : "m" (*v));
+	__asm__ __volatile__("subql #1,%0" : "=m" (*v): "0" (*v));
 }
 
 static __inline__ int atomic_dec_and_test(atomic_t *v)
 {
 	char c;
-	__asm__ __volatile__("subql #1,%1; seq %0" : "=d" (c) : "m" (*v));
+	__asm__ __volatile__("subql #1,%1; seq %0" : "=d" (c), "=m" (*v): "1" (*v));
 	return c != 0;
 }
 

@@ -3,7 +3,7 @@
 
 /*
 
-VoxWare compatible Atari TT DMA sound driver for 680x0 Linux
+VoxWare compatible Atari TT DMA sound driver for Linux/m68k
 
 (c) 1995 by Michael Schlueter & Michael Marte
 
@@ -62,10 +62,20 @@ History:
 
 1996/3/9	++geert: support added for Amiga, A-law, 16-bit little endian.
 			Unification to drivers/sound/dmasound.c.
+
 1996/4/6	++Martin Mitchell: updated to 1.3 kernel.
+
+1996/6/13       ++topi: fixed things that were broken (mainly the amiga
+                        14-bit routines), /dev/sndstat shows now the real
+                        hardware frequency, the lowpass filter is disabled
+			by default now.
+
+1996/9/25	++geert: modularization
+
 */
 
 
+#include <linux/module.h>
 #include <linux/sched.h>
 #include <linux/timer.h>
 #include <linux/major.h>
@@ -75,10 +85,10 @@ History:
 #include <linux/mm.h>
 #include <linux/malloc.h>
 
+#include <asm/setup.h>
 #include <asm/system.h>
 #include <asm/irq.h>
 #include <asm/pgtable.h>
-#include <asm/bootinfo.h>
 
 #ifdef CONFIG_ATARI
 #include <asm/atarihw.h>
@@ -93,13 +103,20 @@ History:
 #include <linux/soundcard.h>
 
 
+#ifdef MODULE
+static int chrdev_registered = 0;
+static int irq_installed = 0;
+#endif /* MODULE */
+static char **sound_buffers = NULL;
+
+
 #ifdef CONFIG_ATARI
 extern void atari_microwire_cmd(int cmd);
 #endif /* CONFIG_ATARI */
 
 #ifdef CONFIG_AMIGA
    /*
-    *	The minimum period for audio depends on total (for OCS/ECS/AGA)
+    *	The minimum period for audio depends on htotal (for OCS/ECS/AGA)
     *	(Imported from arch/m68k/amiga/amisound.c)
     */
 
@@ -443,6 +460,9 @@ typedef struct {
     void *(*dma_alloc)(unsigned int, int);
     void (*dma_free)(void *, unsigned int);
     int (*irqinit)(void);
+#ifdef MODULE
+    void (*irqcleanup)(void);
+#endif /* MODULE */
     void (*init)(void);
     void (*silence)(void);
     int (*setFormat)(int);
@@ -498,6 +518,9 @@ static struct sound_settings sound;
 static void *AtaAlloc(unsigned int size, int flags);
 static void AtaFree(void *, unsigned int size);
 static int AtaIrqInit(void);
+#ifdef MODULE
+static void AtaIrqCleanUp(void);
+#endif /* MODULE */
 static int AtaSetBass(int bass);
 static int AtaSetTreble(int treble);
 static void TTSilence(void);
@@ -510,13 +533,16 @@ static int FalconSetFormat(int format);
 static int FalconSetVolume(int volume);
 static void ata_sq_play_next_frame(int index);
 static void AtaPlay(void);
-static void ata_sq_interrupt(int irq, struct pt_regs *fp, void *dummy);
+static void ata_sq_interrupt(int irq, void *dummy, struct pt_regs *fp);
 #endif /* CONFIG_ATARI */
 
 #ifdef CONFIG_AMIGA
 static void *AmiAlloc(unsigned int size, int flags);
 static void AmiFree(void *, unsigned int);
 static int AmiIrqInit(void);
+#ifdef MODULE
+static void AmiIrqCleanUp(void);
+#endif /* MODULE */
 static void AmiSilence(void);
 static void AmiInit(void);
 static int AmiSetFormat(int format);
@@ -524,7 +550,7 @@ static int AmiSetVolume(int volume);
 static int AmiSetTreble(int treble);
 static void ami_sq_play_next_frame(int index);
 static void AmiPlay(void);
-static void ami_sq_interrupt(int irq, struct pt_regs *fp, void *dummy);
+static void ami_sq_interrupt(int irq, void *dummy, struct pt_regs *fp);
 #endif /* CONFIG_AMIGA */
 
 
@@ -1304,7 +1330,7 @@ static long ami_ct_u8(const u_char *userPtr, long userCount, u_char frame[],
 	    *left++ = get_user(userPtr++) ^ 0x80;
 	    *right++ = get_user(userPtr++) ^ 0x80;
 	    count--;
-	}
+        }
     }
     *frameUsed += used;
     return(used);
@@ -1324,8 +1350,8 @@ static long ami_ct_s16be(const u_char *userPtr, long userCount, u_char frame[],
 	used = count*2;
 	while (count > 0) {
 	    data = get_user(((u_short *)userPtr)++);
-	    *high = data>>8;
-	    *low = (data>>2) & 0x3f;
+	    *high++ = data>>8;
+	    *low++ = (data>>2) & 0x3f;
 	    count--;
 	}
     } else {
@@ -1337,13 +1363,13 @@ static long ami_ct_s16be(const u_char *userPtr, long userCount, u_char frame[],
 	used = count*4;
 	while (count > 0) {
 	    data = get_user(((u_short *)userPtr)++);
-	    *lefth = data>>8;
-	    *leftl = (data>>2) & 0x3f;
+	    *lefth++ = data>>8;
+	    *leftl++ = (data>>2) & 0x3f;
 	    data = get_user(((u_short *)userPtr)++);
-	    *righth = data>>8;
-	    *rightl = (data>>2) & 0x3f;
+	    *righth++ = data>>8;
+	    *rightl++ = (data>>2) & 0x3f;
 	    count--;
-	}
+       }
     }
     *frameUsed += used;
     return(used);
@@ -1363,8 +1389,8 @@ static long ami_ct_u16be(const u_char *userPtr, long userCount, u_char frame[],
 	used = count*2;
 	while (count > 0) {
 	    data = get_user(((u_short *)userPtr)++) ^ 0x8000;
-	    *high = data>>8;
-	    *low = (data>>2) & 0x3f;
+	    *high++ = data>>8;
+	    *low++ = (data>>2) & 0x3f;
 	    count--;
 	}
     } else {
@@ -1376,11 +1402,11 @@ static long ami_ct_u16be(const u_char *userPtr, long userCount, u_char frame[],
 	used = count*4;
 	while (count > 0) {
 	    data = get_user(((u_short *)userPtr)++) ^ 0x8000;
-	    *lefth = data>>8;
-	    *leftl = (data>>2) & 0x3f;
+	    *lefth++ = data>>8;
+	    *leftl++ = (data>>2) & 0x3f;
 	    data = get_user(((u_short *)userPtr)++) ^ 0x8000;
-	    *righth = data>>8;
-	    *rightl = (data>>2) & 0x3f;
+	    *righth++ = data>>8;
+	    *rightl++ = (data>>2) & 0x3f;
 	    count--;
 	}
     }
@@ -1403,8 +1429,8 @@ static long ami_ct_s16le(const u_char *userPtr, long userCount, u_char frame[],
 	while (count > 0) {
 	    data = get_user(((u_short *)userPtr)++);
 	    data = le2be16(data);
-	    *high = data>>8;
-	    *low = (data>>2) & 0x3f;
+	    *high++ = data>>8;
+	    *low++ = (data>>2) & 0x3f;
 	    count--;
 	}
     } else {
@@ -1417,12 +1443,12 @@ static long ami_ct_s16le(const u_char *userPtr, long userCount, u_char frame[],
 	while (count > 0) {
 	    data = get_user(((u_short *)userPtr)++);
 	    data = le2be16(data);
-	    *lefth = data>>8;
-	    *leftl = (data>>2) & 0x3f;
+	    *lefth++ = data>>8;
+	    *leftl++ = (data>>2) & 0x3f;
 	    data = get_user(((u_short *)userPtr)++);
 	    data = le2be16(data);
-	    *righth = data>>8;
-	    *rightl = (data>>2) & 0x3f;
+	    *righth++ = data>>8;
+	    *rightl++ = (data>>2) & 0x3f;
 	    count--;
 	}
     }
@@ -1445,8 +1471,8 @@ static long ami_ct_u16le(const u_char *userPtr, long userCount, u_char frame[],
 	while (count > 0) {
 	    data = get_user(((u_short *)userPtr)++);
 	    data = le2be16(data) ^ 0x8000;
-	    *high = data>>8;
-	    *low = (data>>2) & 0x3f;
+	    *high++ = data>>8;
+	    *low++ = (data>>2) & 0x3f;
 	    count--;
 	}
     } else {
@@ -1459,12 +1485,12 @@ static long ami_ct_u16le(const u_char *userPtr, long userCount, u_char frame[],
 	while (count > 0) {
 	    data = get_user(((u_short *)userPtr)++);
 	    data = le2be16(data) ^ 0x8000;
-	    *lefth = data>>8;
-	    *leftl = (data>>2) & 0x3f;
+	    *lefth++ = data>>8;
+	    *leftl++ = (data>>2) & 0x3f;
 	    data = get_user(((u_short *)userPtr)++);
 	    data = le2be16(data) ^ 0x8000;
-	    *righth = data>>8;
-	    *rightl = (data>>2) & 0x3f;
+	    *righth++ = data>>8;
+	    *rightl++ = (data>>2) & 0x3f;
 	    count--;
 	}
     }
@@ -1550,11 +1576,21 @@ static int AtaIrqInit(void)
     mfp.tim_dt_a = 1;		/* Cause interrupt after first event. */
     mfp.tim_ct_a = 8;		/* Turn on event counting. */
     /* Register interrupt handler. */
-    add_isr(IRQ_MFP_TIMA, ata_sq_interrupt, IRQ_TYPE_SLOW, NULL, "DMA sound");
+    request_irq(IRQ_MFP_TIMA, ata_sq_interrupt, IRQ_TYPE_SLOW,
+                "DMA sound", ata_sq_interrupt);
     mfp.int_en_a |= 0x20;	/* Turn interrupt on. */
     mfp.int_mk_a |= 0x20;
     return(1);
 }
+
+#ifdef MODULE
+static void AtaIrqCleanUp(void)
+{
+    mfp.tim_ct_a = 0;		/* stop timer */
+    mfp.int_en_a &= ~0x20;	/* turn interrupt off */
+    free_irq(IRQ_MFP_TIMA, ata_sq_interrupt);
+}
+#endif /* MODULE */
 
 
 #define TONE_VOXWARE_TO_DB(v) \
@@ -1927,7 +1963,7 @@ static void AtaPlay(void)
 }
 
 
-static void ata_sq_interrupt(int irq, struct pt_regs *fp, void *dummy)
+static void ata_sq_interrupt(int irq, void *dummy, struct pt_regs *fp)
 {
 #if 0
     /* ++TeSche: if you should want to test this... */
@@ -2018,11 +2054,21 @@ static int AmiIrqInit(void)
     custom.dmacon = AMI_AUDIO_OFF;
 
     /* Register interrupt handler. */
-    if (!add_isr(IRQ_AMIGA_AUD0, ami_sq_interrupt, 0, NULL, "DMA sound"))
-	panic("Couldn't add audio interrupt");
+    if (request_irq(IRQ_AMIGA_AUD0, ami_sq_interrupt, 0,
+                    "DMA sound", ami_sq_interrupt))
+	return(0);
     return(1);
 }
 
+#ifdef MODULE
+static void AmiIrqCleanUp(void)
+{
+    /* turn off DMA for audio channels */
+    custom.dmacon = AMI_AUDIO_OFF;
+    /* release the interrupt */
+    free_irq(IRQ_AMIGA_AUD0, ami_sq_interrupt);
+}
+#endif /* MODULE */
 
 static void AmiSilence(void)
 {
@@ -2047,14 +2093,16 @@ static void AmiInit(void)
     if (period < amiga_audio_min_period) {
 	/* we would need to squeeze the sound, but we won't do that */
 	period = amiga_audio_min_period;
-	sound.hard.speed = amiga_colorclock/(period+1);
     } else if (period > 65535) {
 	period = 65535;
-	sound.hard.speed = amiga_colorclock/(period+1);
     }
+    sound.hard.speed = amiga_colorclock/(period+1);
+
     for (i = 0; i < 4; i++)
 	custom.aud[i].audper = period;
     amiga_audio_period = period;
+
+    AmiSetTreble(50);  /* recommended for newer amiga models */
 }
 
 
@@ -2113,10 +2161,10 @@ static int AmiSetVolume(int volume)
 static int AmiSetTreble(int treble)
 {
     sound.treble = treble;
-    if (treble > 50)
-	ciaa.pra |= 0x02;
-    else
+    if (treble < 50)
 	ciaa.pra &= ~0x02;
+    else
+	ciaa.pra |= 0x02;
     return(treble);
 }
 
@@ -2161,6 +2209,8 @@ static void ami_sq_play_next_frame(int index)
 	    /* We can play pseudo 14-bit only with the maximum volume */
 	    ch3 = ch0+sq.block_size_quarter;
 	    ch2 = ch1+sq.block_size_quarter;
+	    custom.aud[2].audvol = 1;  /* we are being affected by the beeps */
+	    custom.aud[3].audvol = 1;  /* restoring volume here helps a bit */
 	    custom.aud[2].audlc = (u_short *)ZTWO_PADDR(ch2);
 	    custom.aud[2].audlen = size;
 	    custom.aud[3].audlc = (u_short *)ZTWO_PADDR(ch3);
@@ -2210,7 +2260,7 @@ static void AmiPlay(void)
 }
 
 
-static void ami_sq_interrupt(int irq, struct pt_regs *fp, void *dummy)
+static void ami_sq_interrupt(int irq, void *dummy, struct pt_regs *fp)
 {
     int minframes = 1;
 
@@ -2256,20 +2306,32 @@ static void ami_sq_interrupt(int irq, struct pt_regs *fp, void *dummy)
 
 #ifdef CONFIG_ATARI
 static MACHINE machTT = {
-    DMASND_TT, AtaAlloc, AtaFree, AtaIrqInit, TTInit, TTSilence, TTSetFormat,
-    TTSetVolume, AtaSetBass, AtaSetTreble, AtaPlay
+    DMASND_TT, AtaAlloc, AtaFree, AtaIrqInit,
+#ifdef MODULE
+    AtaIrqCleanUp,
+#endif /* MODULE */
+    TTInit, TTSilence, TTSetFormat, TTSetVolume, AtaSetBass, AtaSetTreble,
+    AtaPlay
 };
 
 static MACHINE machFalcon = {
-    DMASND_FALCON, AtaAlloc, AtaFree, AtaIrqInit, FalconInit, FalconSilence,
-    FalconSetFormat, FalconSetVolume, AtaSetBass, AtaSetTreble, AtaPlay
+    DMASND_FALCON, AtaAlloc, AtaFree, AtaIrqInit,
+#ifdef MODULE
+    AtaIrqCleanUp,
+#endif /* MODULE */
+    FalconInit, FalconSilence, FalconSetFormat, FalconSetVolume, AtaSetBass,
+    AtaSetTreble, AtaPlay
 };
 #endif /* CONFIG_ATARI */
 
 #ifdef CONFIG_AMIGA
 static MACHINE machAmiga = {
-    DMASND_AMIGA, AmiAlloc, AmiFree, AmiIrqInit, AmiInit, AmiSilence,
-    AmiSetFormat, AmiSetVolume, NULL, AmiSetTreble, AmiPlay
+    DMASND_AMIGA, AmiAlloc, AmiFree, AmiIrqInit,
+#ifdef MODULE
+    AmiIrqCleanUp,
+#endif /* MODULE */
+    AmiInit, AmiSilence, AmiSetFormat, AmiSetVolume, NULL, AmiSetTreble,
+    AmiPlay
 };
 #endif /* CONFIG_AMIGA */
 
@@ -2921,31 +2983,37 @@ static int state_read(char *dest, int count)
 static int sound_open(struct inode *inode, struct file *file)
 {
     int dev = MINOR(inode->i_rdev) & 0x0f;
+    int rc = 0;
 
     switch (dev) {
 	case SND_DEV_STATUS:
-	    return(state_open(file->f_flags));
+	    rc = state_open(file->f_flags);
+	    break;
 	case SND_DEV_CTL:
-	    return(mixer_open(file->f_flags));
+	    rc = mixer_open(file->f_flags);
+	    break;
 	case SND_DEV_DSP:
 	case SND_DEV_AUDIO:
-	    {
-		int rc = sq_open(file->f_flags);
-		if (rc == 0) {
-		    sound.minDev = dev;
-		    sound.soft = sound.dsp;
-		    sound_init();
-		    if (dev == SND_DEV_AUDIO) {
-			sound_set_speed(8000);
-			sound_set_stereo(0);
-			sound_set_format(AFMT_MU_LAW);
-		    }
+	    rc = sq_open(file->f_flags);
+	    if (rc == 0) {
+		sound.minDev = dev;
+		sound.soft = sound.dsp;
+		sound_init();
+		if (dev == SND_DEV_AUDIO) {
+		    sound_set_speed(8000);
+		    sound_set_stereo(0);
+		    sound_set_format(AFMT_MU_LAW);
 		}
-		return(rc);
 	    }
+	    break;
 	default:
-	    return(-ENXIO);
+	    rc = -ENXIO;
     }
+#ifdef MODULE
+    if (rc >= 0)
+	MOD_INC_USE_COUNT;
+#endif
+    return(rc);
 }
 
 
@@ -2971,15 +3039,25 @@ static void sound_release(struct inode *inode, struct file *file)
     int dev = MINOR(inode->i_rdev);
 
     switch (dev & 0x0f) {
-	case SND_DEV_STATUS: state_release(); return;
-	case SND_DEV_CTL: mixer_release(); return;
+	case SND_DEV_STATUS:
+	    state_release();
+	    break;
+	case SND_DEV_CTL:
+	    mixer_release();
+	    break;
 	case SND_DEV_DSP:
 	case SND_DEV_AUDIO:
-	    sq_release(); sound.soft = sound.dsp; sound_silence();
-	    return;
+	    sq_release();
+	    sound.soft = sound.dsp;
+	    sound_silence();
+	    break;
 	default:
 	    unknown_minor_dev("sound_release", dev);
+	    return;
     }
+#ifdef MODULE
+    MOD_DEC_USE_COUNT;
+#endif
 }
 
 
@@ -3146,7 +3224,6 @@ static struct file_operations sound_fops =
 void soundcard_init(void)
 {
     int has_sound = 0;
-    char **buffers;
     int i;
 
     switch (boot_info.machtype) {
@@ -3180,26 +3257,29 @@ void soundcard_init(void)
 	return;
 
     /* Set up sound queue, /dev/audio and /dev/dsp. */
-    buffers = kmalloc (numBufs * sizeof(char *), GFP_KERNEL);
-    if (!buffers) {
-    out_of_memory:
+    sound_buffers = kmalloc (numBufs * sizeof(char *), GFP_KERNEL);
+    if (!sound_buffers) {
+out_of_memory:
 	printk("DMA sound driver: Not enough buffer memory, driver disabled!\n");
 	return;
     }
     for (i = 0; i < numBufs; i++) {
-	buffers[i] = sound.mach.dma_alloc (bufSize << 10, GFP_KERNEL);
-	if (!buffers[i]) {
+	sound_buffers[i] = sound.mach.dma_alloc (bufSize << 10, GFP_KERNEL);
+	if (!sound_buffers[i]) {
 	    while (i--)
-		sound.mach.dma_free (buffers[i], bufSize << 10);
-	    kfree (buffers);
+		sound.mach.dma_free (sound_buffers[i], bufSize << 10);
+	    kfree (sound_buffers);
+	    sound_buffers = 0;
 	    goto out_of_memory;
         }
     }
 
+#ifndef MODULE
     /* Register driver with the VFS. */
     register_chrdev(SOUND_MAJOR, "sound", &sound_fops);
+#endif
 
-    sq_init(numBufs, bufSize << 10, buffers);
+    sq_init(numBufs, bufSize << 10, sound_buffers);
 
     /* Set up /dev/sndstat. */
     state_init();
@@ -3211,6 +3291,9 @@ void soundcard_init(void)
 	printk("DMA sound driver: Interrupt initialization failed\n");
 	return;
     }
+#ifdef MODULE
+    irq_installed = 1;
+#endif
 
     printk("DMA sound driver installed, using %d buffers of %dk.\n", numBufs,
 	   bufSize);
@@ -3222,6 +3305,9 @@ void sound_setup(char *str, int *ints)
 {
     /* ++Martin: stub, could possibly be merged with soundcard.c et al later */
 }
+
+
+#define MAXARGS		8	/* Should be sufficient for now */
 
 void dmasound_setup(char *str, int *ints)
 {
@@ -3250,3 +3336,56 @@ void dmasound_setup(char *str, int *ints)
 	    printk("dmasound_setup: illegal number of arguments\n");
     }
 }
+
+
+#ifdef MODULE
+
+static int dmasound[MAXARGS] = { 0 };
+
+int init_module(void)
+{
+    int err, i = 0;
+    int ints[MAXARGS+1];
+
+    while (i < MAXARGS && dmasound[i])
+	ints[i + 1] = dmasound[i++];
+    ints[0] = i;
+
+    if (i)
+	dmasound_setup("dmasound=", ints);
+
+    err = register_chrdev(SOUND_MAJOR, "sound", &sound_fops);
+    if (err) {
+	printk("dmasound: driver already loaded/included in kernel\n");
+	return err;
+    }
+    chrdev_registered = 1;
+    soundcard_init();
+
+    return 0;
+}
+
+
+void cleanup_module(void)
+{
+    int i;
+
+    if (MOD_IN_USE)
+	return;
+
+    if (chrdev_registered)
+	unregister_chrdev(SOUND_MAJOR, "sound");
+
+    if (irq_installed) {
+	sound_silence();
+	sound.mach.irqcleanup();
+    }
+
+    if (sound_buffers) {
+	for (i = 0; i < numBufs; i++)
+	    sound.mach.dma_free(sound_buffers[i], bufSize << 10);
+	kfree(sound_buffers);
+    }
+}
+
+#endif /* MODULE */

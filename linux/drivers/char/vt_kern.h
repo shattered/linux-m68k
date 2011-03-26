@@ -30,10 +30,12 @@ extern struct vt_struct {
 	struct wait_queue *paste_wait;
 } *vt_cons[MAX_NR_CONSOLES];
 
-void (*kd_mksound)(unsigned int hz, unsigned int ticks);
+extern void (*kd_mksound)(unsigned int hz, unsigned int ticks);
 int vc_allocate(unsigned int console);
 int vc_cons_allocated(unsigned int console);
 int vc_resize(unsigned long lines, unsigned long cols);
+void vc_resize_con(unsigned long lines, unsigned long cols,
+		   unsigned int currcons);
 void vc_disallocate(unsigned int console);
 
 #endif /* _VT_KERN_H */

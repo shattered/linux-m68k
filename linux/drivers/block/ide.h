@@ -5,6 +5,7 @@
  */
 
 #include <linux/config.h>
+#include <asm/ide.h>
 
 /*
  * This is the multiple IDE interface driver, as evolved from hd.c.  
@@ -92,6 +93,10 @@ typedef unsigned char	byte;	/* used everywhere */
 #define HWIF(drive)		((ide_hwif_t *)((drive)->hwif))
 #define HWGROUP(drive)		((ide_hwgroup_t *)(HWIF(drive)->hwgroup))
 
+#ifdef IDE_IO_PORT_IO
+/*
+ * io-port-io specific definitions for accessing IDE controller registers
+ */
 #define IDE_DATA_OFFSET		(0)
 #define IDE_ERROR_OFFSET	(1)
 #define IDE_NSECTOR_OFFSET	(2)
@@ -119,6 +124,25 @@ typedef unsigned char	byte;	/* used everywhere */
 #define IDE_BCOUNTL_REG		IDE_LCYL_REG
 #define IDE_BCOUNTH_REG		IDE_HCYL_REG
 
+#else /* then IDE_MEM_MAPPED_IO */
+/*
+ * mem-mapped-io specific definitions for accessing IDE controller registers
+ */
+#define IDE_DATA_REG		(HWIF(drive)->io_base)
+#define IDE_ERROR_REG		(HWIF(drive)->hd_regs.hd_error)
+#define IDE_NSECTOR_REG		(HWIF(drive)->hd_regs.hd_nsector)
+#define IDE_SECTOR_REG		(HWIF(drive)->hd_regs.hd_sector)
+#define IDE_LCYL_REG		(HWIF(drive)->hd_regs.hd_lcyl)
+#define IDE_HCYL_REG		(HWIF(drive)->hd_regs.hd_hcyl)
+#define IDE_SELECT_REG		(HWIF(drive)->hd_regs.hd_select)
+#define IDE_STATUS_REG		(HWIF(drive)->hd_regs.hd_status)
+#define IDE_CONTROL_REG		(HWIF(drive)->ctl_port)
+#define IDE_FEATURE_REG		IDE_ERROR_REG
+#define IDE_COMMAND_REG		IDE_STATUS_REG
+#define IDE_ALTSTATUS_REG	IDE_CONTROL_REG
+#define IDE_IRQ_REG		(HWIF(drive)->hd_regs.hd_irq)
+#endif
+
 #ifdef REALLY_FAST_IO
 #define OUT_BYTE(b,p)		outb((b),(p))
 #define IN_BYTE(p)		(byte)inb(p)
@@ -144,9 +168,6 @@ typedef unsigned char	byte;	/* used everywhere */
 #define PARTN_BITS	6	/* number of minor dev bits for partitions */
 #define PARTN_MASK	((1<<PARTN_BITS)-1)	/* a useful bit mask */
 #define MAX_DRIVES	2	/* per interface; 2 assumed by lots of code */
-#ifndef MAX_HWIFS
-#define MAX_HWIFS	4	/* an arbitrary, but realistic limit */
-#endif
 #define SECTOR_WORDS	(512 / 4)	/* number of 32bit words per sector */
 
 /*
@@ -162,6 +183,7 @@ typedef unsigned char	byte;	/* used everywhere */
 #define WAIT_WORSTCASE	(30*HZ)	/* 30sec  - worst case when spinning up */
 #define WAIT_CMD	(10*HZ)	/* 10sec  - maximum wait for an IRQ to happen */
 
+#ifdef IDE_IO_PORT_IO
 #if defined(CONFIG_BLK_DEV_HT6560B) || defined(CONFIG_BLK_DEV_PROMISE)
 #define SELECT_DRIVE(hwif,drive)				\
 {								\
@@ -173,6 +195,9 @@ typedef unsigned char	byte;	/* used everywhere */
 #else
 #define SELECT_DRIVE(hwif,drive)  OUT_BYTE((drive)->select.all, hwif->io_base+IDE_SELECT_OFFSET);
 #endif	/* CONFIG_BLK_DEV_HT6560B || CONFIG_BLK_DEV_PROMISE */
+#else /* IDE_IO_PORT_IO vs IDE_MEM_MAPPED_IO */
+#define SELECT_DRIVE(hwif,drive)  OUT_BYTE((drive)->select.all, hwif->hd_regs.hd_select);
+#endif /* IDE_IO_PORT_IO */
 		
 #ifdef CONFIG_BLK_DEV_IDETAPE
 #include "ide-tape.h"
@@ -317,6 +342,18 @@ typedef union {
 		} b;
 	} special_t;
 
+#ifdef __BIG_ENDIAN_BITFIELD
+typedef union {
+	unsigned all			: 8;	/* all of the bits together */
+	struct {
+		unsigned bit7		: 1;	/* always 1 */
+		unsigned lba		: 1;	/* using LBA instead of CHS */
+		unsigned bit5		: 1;	/* always 1 */
+		unsigned unit		: 1;	/* drive select number, 0 or 1 */
+		unsigned head		: 4;	/* always zeros here */
+	} b;
+	} select_t;
+#else /* __BIG_ENDIAN_BITFIELD */
 typedef union {
 	unsigned all			: 8;	/* all of the bits together */
 	struct {
@@ -327,6 +364,7 @@ typedef union {
 		unsigned bit7		: 1;	/* always 1 */
 	} b;
 	} select_t;
+#endif /* __BIG_ENDIAN_BITFIELD */
 
 typedef struct ide_drive_s {
 	special_t	special;	/* special action flags */
@@ -435,8 +473,18 @@ typedef enum {	ide_unknown,	ide_generic,	ide_triton,
 typedef struct hwif_s {
 	struct hwif_s	*next;		/* for linked-list in ide_hwgroup_t */
 	void		*hwgroup;	/* actually (ide_hwgroup_t *) */
+#ifdef IDE_MEM_MAPPED_IO
+	unsigned char *	io_base;	/* base addres for port */
+	unsigned char *	ctl_port;	/* The control port */
+	struct {
+		unsigned char *hd_error, *hd_nsector, *hd_sector,
+		              *hd_lcyl, *hd_hcyl, *hd_select,
+		              *hd_status, *hd_irq;
+	} hd_regs;
+#else /* IDE_IO_PORT_IO */
 	unsigned short	io_base;	/* base io port addr */
 	unsigned short	ctl_port;	/* usually io_base+0x206 */
+#endif
 	ide_drive_t	drives[MAX_DRIVES];	/* drive info */
 	struct gendisk	*gd;		/* gendisk structure */
 	ide_tuneproc_t	*tuneproc;	/* routine to tune PIO mode for drives */
@@ -446,10 +494,10 @@ typedef struct hwif_s {
 	ide_dmaproc_t	*dmaproc;	/* dma read/write/abort routine */
 	unsigned long	*dmatable;	/* dma physical region descriptor table */
 	unsigned short	dma_base;	/* base addr for dma ports (triton) */
-	byte		irq;		/* our irq number */
+	int		irq;		/* our irq number */
 	byte		major;		/* our major number */
-	char 		name[5];	/* name of interface, eg. "ide0" */
 	byte		index;		/* 0 for ide0; 1 for ide1; ... */
+	char 		name[6];	/* name of interface, eg. "ide0" */
 	hwif_chipset_t	chipset;	/* sub-module for tuning.. */
 	unsigned	noprobe    : 1;	/* don't probe for this interface */
 	unsigned	present    : 1;	/* this interface exists */
@@ -517,10 +565,26 @@ void ide_set_recovery_timer (ide_hwif_t *);
  */
 void ide_input_data (ide_drive_t *drive, void *buffer, unsigned int wcount);
 
+#ifdef CONFIG_ATARI
+/*
+ * This is used for all data transfers with the byte-swapped Atari IDE interface
+ */
+void ide_input_data_swap (ide_drive_t *drive, void *buffer, unsigned int wcount);
+void ide_output_data_swap (ide_drive_t *drive, void *buffer, unsigned int wcount);
+#endif /* CONFIG_ATARI */
+
 /*
  * This is used for (nearly) all data transfers to the IDE interface
  */
 void ide_output_data (ide_drive_t *drive, void *buffer, unsigned int wcount);
+
+#ifdef CONFIG_ATARI
+/*
+ * These are used for all data transfers with the byte-swapped Atari IDE interface
+ */
+void ide_input_data_swap (ide_drive_t *drive, void *buffer, unsigned int wcount);
+void ide_output_data_swap (ide_drive_t *drive, void *buffer, unsigned int wcount);
+#endif /* CONFIG_ATARI */
 
 /*
  * This is used for (nearly) all ATAPI data transfers from/to the IDE interface

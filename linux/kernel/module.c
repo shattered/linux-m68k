@@ -7,6 +7,7 @@
 #include <linux/sched.h>
 #include <linux/malloc.h>
 #include <linux/config.h>
+#include <asm/pgtable.h>
 /*
  * Originally by Anonymous (as far as I know...)
  * Linux version by Bas Laarhoven <bas@vimec.nl>
@@ -245,6 +246,9 @@ sys_init_module(char *module_name, char *code, unsigned codesize,
 			ref->module = mp;
 		}
 	}
+
+	flush_pages_to_ram((unsigned long)mp->addr,
+			   (codesize+sizeof(long)+PAGE_SIZE-1)/PAGE_SIZE);
 
 	GET_USE_COUNT(mp) += 1;
 	if ((*rt.init)() != 0) {

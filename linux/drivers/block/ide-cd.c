@@ -153,6 +153,7 @@
 
 /***************************************************************************/
 
+#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/delay.h>
@@ -170,6 +171,7 @@
 #include <asm/byteorder.h>
 #include <asm/segment.h>
 #include <asm/unaligned.h>
+#include <asm/setup.h>
 
 #include "ide.h"
 
@@ -303,6 +305,17 @@ static inline
 void cdrom_in_bytes (ide_drive_t *drive, void *buffer, uint bytecount)
 {
 	++bytecount;
+#ifdef CONFIG_ATARI
+	if (MACH_IS_ATARI) {
+		/* Atari has a byte-swapped IDE interface */
+		ide_input_data_swap (drive, buffer, bytecount / 4);
+		if ((bytecount & 0x03) >= 2) {
+			insw_swapw(IDE_DATA_REG,
+				   ((byte *)buffer) + (bytecount & ~0x03), 1);
+		}
+		return;
+	} /* else do normal transfer */
+#endif /* CONFIG_ATARI */
 	ide_input_data (drive, buffer, bytecount / 4);
 	if ((bytecount & 0x03) >= 2) {
 		insw (IDE_DATA_REG, ((byte *)buffer) + (bytecount & ~0x03), 1);
@@ -314,6 +327,17 @@ static inline
 void cdrom_out_bytes (ide_drive_t *drive, void *buffer, uint bytecount)
 {
 	++bytecount;
+#ifdef CONFIG_ATARI
+	if (MACH_IS_ATARI) {
+		/* Atari has a byte-swapped IDE interface */
+		ide_output_data_swap (drive, buffer, bytecount / 4);
+		if ((bytecount & 0x03) >= 2) {
+			outsw_swapw(IDE_DATA_REG,
+				    ((byte *)buffer) + (bytecount & ~0x03), 1);
+		}
+		return;
+	} /* else do normal transfer */
+#endif /* CONFIG_ATARI */
 	ide_output_data (drive, buffer, bytecount / 4);
 	if ((bytecount & 0x03) >= 2) {
 		outsw (IDE_DATA_REG,

@@ -329,6 +329,15 @@ do_load_aout_binary(struct linux_binprm * bprm, struct pt_regs * regs)
 			MAP_FIXED|MAP_PRIVATE, 0);
 		read_exec(bprm->inode, 32, (char *) 0, ex.a_text+ex.a_data, 0);
 #endif
+#if 1
+		/* there's no nice way of flushing a number of
+		   user pages to ram 8*( */
+		flush_cache_all();
+#if 0
+		flush_cache_range(current->mm, (unsigned long) 0,
+				  (unsigned long) 0 + ex.a_text+ex.a_data);
+#endif
+#endif
 	} else {
 		if (ex.a_text & 0xfff || ex.a_data & 0xfff)
 			printk(KERN_NOTICE "executable not page aligned\n");
@@ -345,6 +354,16 @@ do_load_aout_binary(struct linux_binprm * bprm, struct pt_regs * regs)
 				MAP_FIXED|MAP_PRIVATE, 0);
 			read_exec(bprm->inode, fd_offset,
 				  (char *) N_TXTADDR(ex), ex.a_text+ex.a_data, 0);
+#if 1
+			/* there's no nice way of flushing a number of
+			   user pages to ram 8*( */
+			flush_cache_all();
+#if 0
+			flush_cache_range(current->mm,
+					  (unsigned long) N_TXTADDR(ex),
+					  (unsigned long) ex.a_text+ex.a_data);
+#endif
+#endif
 			goto beyond_if;
 		}
 

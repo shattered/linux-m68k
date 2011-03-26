@@ -52,6 +52,10 @@
 #error sorry, your GCC is too old. It builds incorrect kernels.
 #endif
 
+#ifdef __mc68000__
+#include <asm/machdep.h>
+#endif /* __mc68000__ */
+
 extern char _stext, _etext;
 extern const char *linux_banner;
 
@@ -109,6 +113,7 @@ extern void scsi_luns_setup(char *str, int *ints);
 extern void sound_setup(char *str, int *ints);
 extern void apm_setup(char *str, int *ints);
 extern void reboot_setup(char *str, int *ints);
+extern void video_setup(char *str, int *ints);
 #ifdef CONFIG_CDU31A
 extern void cdu31a_setup(char *str, int *ints);
 #endif CONFIG_CDU31A
@@ -172,7 +177,7 @@ extern void atari_scsi_setup (char *str, int *ints);
 #endif
 extern void wd33c93_setup (char *str, int *ints);
 extern void gvp11_setup (char *str, int *ints);
-
+extern void ncr53c7xx_setup (char *str, int *ints);
 #ifdef CONFIG_CYCLADES
 extern void cy_setup(char *str, int *ints);
 #endif
@@ -228,12 +233,14 @@ extern int rd_prompt;		/* 1 = prompt for ramdisk, 0 = don't prompt */
 extern int rd_size;		/* Size of the ramdisk(s) */
 extern int rd_image_start;	/* starting block # of image */
 #ifdef CONFIG_BLK_DEV_INITRD
-kdev_t real_root_dev;
+int real_root_dev;		/* MUST be int for sysctl! */
 #endif
 #endif
 
 int root_mountflags = MS_RDONLY;
 char *execute_command = 0;
+
+int serial_debug = 0;
 
 #ifdef CONFIG_ROOT_NFS
 char nfs_root_name[NFS_ROOT_NAME_LEN] = { "default" };
@@ -294,6 +301,9 @@ struct kernel_param bootsetups[] = {
 #ifdef CONFIG_BLK_DEV_INITRD
 	{ "noinitrd", no_initrd },
 #endif
+#endif
+#if defined (CONFIG_AMIGA) || defined (CONFIG_ATARI)
+	{ "video=", video_setup },
 #endif
 	{ "swap=", swap_setup },
 	{ "buff=", buff_setup },
@@ -449,6 +459,9 @@ struct kernel_param bootsetups[] = {
 #if defined(CONFIG_A3000_SCSI) || defined(CONFIG_A2091_SCSI) \
 	    || defined(CONFIG_GVP11_SCSI)
 	{ "wd33c93=", wd33c93_setup },
+#endif
+#if defined(CONFIG_WARPENGINE_SCSI) || defined(CONFIG_A4000T_SCSI)
+	{ "53c7xx=", ncr53c7xx_setup },
 #endif
 #if defined(CONFIG_GVP11_SCSI)
 	{ "gvp11=", gvp11_setup },
@@ -607,8 +620,8 @@ void calibrate_delay(void)
 	loops_per_sec *= HZ;
 /* Round the value and print it */	
 	printk("ok - %lu.%02lu BogoMIPS\n",
-		(loops_per_sec+2500)/500000,
-		((loops_per_sec+2500)/5000) % 100);
+		loops_per_sec/500000,
+		(loops_per_sec/5000) % 100);
 
 #if defined(__SMP__) && defined(__i386__)
 	smp_loops_per_tick = loops_per_sec / 400;
@@ -648,6 +661,11 @@ static void parse_root_dev(char * line)
 		{ "sdn",     0x08d0 },
 		{ "sdo",     0x08e0 },
 		{ "sdp",     0x08f0 },
+		{ "ada",     0x1c00 },
+		{ "adb",     0x1c10 },
+		{ "adc",     0x1c20 },
+		{ "add",     0x1c30 },
+		{ "ade",     0x1c40 },
 		{ "fd",      0x0200 },
 		{ "xda",     0x0d00 },
 		{ "xdb",     0x0d40 },
@@ -754,6 +772,13 @@ static void parse_options(char *line)
 		}
 		if (!strcmp(line,"debug")) {
 			console_loglevel = 10;
+#ifdef __mc68000__
+			mach_debug_init();
+#endif /* __mc68000__ */
+			continue;
+		}
+		if (!strcmp(line,"serdebug")) {
+			serial_debug = 1;
 			continue;
 		}
 		if (!strncmp(line,"init=",5)) {
@@ -878,7 +903,7 @@ static void smp_begin(void)
 /*
  *	Activate the first processor.
  */
- 
+
 asmlinkage void start_kernel(void)
 {
 	char * command_line;
@@ -1076,14 +1101,14 @@ static int init(void * unused)
 
 #ifdef CONFIG_BLK_DEV_INITRD
 	root_mountflags = real_root_mountflags;
-	if (mount_initrd && ROOT_DEV != real_root_dev && ROOT_DEV == MKDEV(RAMDISK_MAJOR,0)) {
+	if (mount_initrd && ROOT_DEV != (kdev_t)real_root_dev && ROOT_DEV == MKDEV(RAMDISK_MAJOR,0)) {
 		int error;
 
 		pid = kernel_thread(do_linuxrc, "/linuxrc", SIGCHLD);
 		if (pid>0)
 			while (pid != wait(&i));
-		if (real_root_dev != MKDEV(RAMDISK_MAJOR, 0)) {
-			error = change_root(real_root_dev,"/initrd");
+		if ((kdev_t)real_root_dev != MKDEV(RAMDISK_MAJOR, 0)) {
+			error = change_root((kdev_t)real_root_dev,"/initrd");
 			if (error)
 				printk(KERN_ERR "Change root to /initrd: "
 				    "error %d\n",error);

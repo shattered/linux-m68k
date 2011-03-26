@@ -395,6 +395,16 @@ identify_ramdisk_image(kdev_t device, struct file *fp, int start_block)
 		nblocks = ext2sb->s_blocks_count;
 		goto done;
 	}
+#ifdef __mc68000__
+	/* Try ext2 with standard (little endian) byte-order */
+	if (e_swab(1, ext2sb->s_magic) == EXT2_SUPER_MAGIC) {
+		printk(KERN_NOTICE
+		       "RAMDISK: Ext2 filesystem found at block %d\n",
+		       start_block);
+		nblocks = e_swab(1, ext2sb->s_blocks_count);
+		goto done;
+	}
+#endif
 	printk(KERN_NOTICE
 	       "RAMDISK: Couldn't find valid ramdisk image starting at %d.\n",
 	       start_block);
@@ -512,7 +522,7 @@ done:
 static void rd_load_disk(int n)
 {
 #ifdef CONFIG_BLK_DEV_INITRD
-	extern kdev_t real_root_dev;
+	extern int real_root_dev;
 #endif	
 	
 	if (rd_doload == 0)
@@ -520,7 +530,7 @@ static void rd_load_disk(int n)
 	
 	if (MAJOR(ROOT_DEV) != FLOPPY_MAJOR
 #ifdef CONFIG_BLK_DEV_INITRD	
-		&& MAJOR(real_root_dev) != FLOPPY_MAJOR
+		&& MAJOR((kdev_t)real_root_dev) != FLOPPY_MAJOR
 #endif		
 	)
 			return;

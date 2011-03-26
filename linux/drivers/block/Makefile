@@ -21,11 +21,54 @@ M_OBJS   :=
 MOD_LIST_NAME := BLOCK_MODULES
 LX_OBJS :=
 
-ifeq ($(CONFIG_BLK_DEV_FD),y)
-L_OBJS += floppy.o
+ifneq "$(ARCH)" "m68k"
+  ifeq ($(CONFIG_BLK_DEV_FD),y)
+    L_OBJS += floppy.o
+  else
+    ifeq ($(CONFIG_BLK_DEV_FD),m)
+      M_OBJS += floppy.o
+    endif
+  endif
 else
-  ifeq ($(CONFIG_BLK_DEV_FD),m)
-  M_OBJS += floppy.o
+  ifdef CONFIG_AMIGA
+    ifeq ($(CONFIG_BLK_DEV_FD),y)
+    L_OBJS += amiflop.o
+    else
+      ifeq ($(CONFIG_BLK_DEV_FD),m)
+      M_OBJS += amiflop.o
+      endif
+    endif
+  endif
+  ifdef CONFIG_ATARI
+    ifeq ($(CONFIG_BLK_DEV_FD),y)
+    L_OBJS += ataflop.o
+    else
+      ifeq ($(CONFIG_BLK_DEV_FD),m)
+      M_OBJS += ataflop.o
+      endif
+    endif
+    ifeq ($(CONFIG_ATARI_ACSI),y)
+      LX_OBJS += acsi.o
+    else
+      ifeq ($(CONFIG_ATARI_ACSI),m)
+      MX_OBJS += acsi.o
+      endif
+    endif
+    ifeq ($(CONFIG_ATARI_SLM),y)
+      L_OBJS += acsi_slm.o
+    else
+      ifeq ($(CONFIG_ATARI_SLM),m)
+      M_OBJS += acsi_slm.o
+      endif
+    endif
+  endif
+endif
+
+ifeq ($(CONFIG_AMIGA_Z2RAM),y)
+L_OBJS += z2ram.o
+else
+  ifeq ($(CONFIG_AMIGA_Z2RAM),m)
+  M_OBJS += z2ram.o
   endif
 endif
 

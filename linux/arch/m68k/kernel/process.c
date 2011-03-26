@@ -2,6 +2,8 @@
  *  linux/arch/m68k/kernel/process.c
  *
  *  Copyright (C) 1995  Hamish Macdonald
+ *
+ *  68060 fixes by Jesper Skov
  */
 
 /*
@@ -23,6 +25,7 @@
 #include <asm/system.h>
 #include <asm/traps.h>
 #include <asm/machdep.h>
+#include <asm/setup.h>
 
 asmlinkage void ret_from_exception(void);
 
@@ -125,10 +128,17 @@ void copy_thread(int nr, unsigned long clone_flags, unsigned long usp,
 
 	p->tss.usp = usp;
 	p->tss.ksp = (unsigned long)childstack;
+	/*
+	 * Must save the current SFC/DFC value, NOT the value when
+	 * the parent was last descheduled - RGH  10-08-96
+	 */
+	p->tss.fs = get_fs();
 
 	/* Copy the current fpu state */
 	asm volatile ("fsave %0" : : "m" (p->tss.fpstate[0]) : "memory");
-	if (p->tss.fpstate[0])
+
+	if((!CPU_IS_060 && p->tss.fpstate[0]) ||
+	   (CPU_IS_060 && p->tss.fpstate[2]))
 	  asm volatile ("fmovemx %/fp0-%/fp7,%0\n\t"
 			"fmoveml %/fpiar/%/fpcr/%/fpsr,%1"
 			: : "m" (p->tss.fp[0]), "m" (p->tss.fpcntl[0])
@@ -139,14 +149,14 @@ void copy_thread(int nr, unsigned long clone_flags, unsigned long usp,
 
 /* Fill in the fpu structure for a core dump.  */
 
-int dump_fpu (struct user_m68kfp_struct *fpu)
+int dump_fpu (struct pt_regs *regs, struct user_m68kfp_struct *fpu)
 {
   char fpustate[216];
 
   /* First dump the fpu context to avoid protocol violation.  */
   asm volatile ("fsave %0" :: "m" (fpustate[0]) : "memory");
-  if (!fpustate[0])
-    return 0;
+  if((!CPU_IS_060 && !fpustate[0]) || (CPU_IS_060 && !fpustate[2]))
+     return 0;
 
   asm volatile ("fmovem %/fpiar/%/fpcr/%/fpsr,%0"
 		:: "m" (fpu->fpcntl[0])
@@ -162,6 +172,8 @@ int dump_fpu (struct user_m68kfp_struct *fpu)
  */
 void dump_thread(struct pt_regs * regs, struct user * dump)
 {
+	struct switch_stack *sw;
+
 /* changed the size calculations - should hopefully work better. lbt */
 	dump->magic = CMAGIC;
 	dump->start_code = 0;
@@ -176,10 +188,29 @@ void dump_thread(struct pt_regs * regs, struct user * dump)
 		dump->u_ssize = ((unsigned long) (TASK_SIZE - dump->start_stack)) >> PAGE_SHIFT;
 
 	dump->u_ar0 = (struct pt_regs *)(((int)(&dump->regs)) -((int)(dump)));
-	dump->regs = *regs;
-	dump->regs2 = ((struct switch_stack *)regs)[-1];
+	sw = ((struct switch_stack *)regs) - 1;
+	dump->regs.d1 = regs->d1;
+	dump->regs.d2 = regs->d2;
+	dump->regs.d3 = regs->d3;
+	dump->regs.d4 = regs->d4;
+	dump->regs.d5 = regs->d5;
+	dump->regs.d6 = sw->d6;
+	dump->regs.d7 = sw->d7;
+	dump->regs.a0 = regs->a0;
+	dump->regs.a1 = regs->a1;
+	dump->regs.a2 = sw->a2;
+	dump->regs.a3 = sw->a3;
+	dump->regs.a4 = sw->a4;
+	dump->regs.a5 = sw->a5;
+	dump->regs.a6 = sw->a6;
+	dump->regs.d0 = regs->d0;
+	dump->regs.orig_d0 = regs->orig_d0;
+	dump->regs.stkadj = regs->stkadj;
+	dump->regs.sr = regs->sr;
+	dump->regs.pc = regs->pc;
+	dump->regs.fmtvec = (regs->format << 12) | regs->vector;
 	/* dump floating point stuff */
-	dump->u_fpvalid = dump_fpu (&dump->m68kfp);
+	dump->u_fpvalid = dump_fpu (regs, &dump->m68kfp);
 }
 
 /*

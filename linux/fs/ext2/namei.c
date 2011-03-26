@@ -36,17 +36,17 @@
  * NOTE! unlike strncmp, ext2_match returns 1 for success, 0 for failure.
  */
 static int ext2_match (int len, const char * const name,
-		       struct ext2_dir_entry * de)
+		       struct ext2_dir_entry * de, int bs)
 {
 	if (!de || !de->inode || len > EXT2_NAME_LEN)
 		return 0;
 	/*
 	 * "" means "." ---> so paths like "/usr/lib//libc.a" work
 	 */
-	if (!len && de->name_len == 1 && (de->name[0] == '.') &&
+	if (!len && e_swab (bs, de->name_len) == 1 && (de->name[0] == '.') &&
 	   (de->name[1] == '\0'))
 		return 1;
-	if (len != de->name_len)
+	if (len != e_swab (bs, de->name_len))
 		return 0;
 	return !memcmp(name, de->name, len);
 }
@@ -67,12 +67,13 @@ static struct buffer_head * ext2_find_entry (struct inode * dir,
 	struct buffer_head * bh_use[NAMEI_RA_SIZE];
 	struct buffer_head * bh_read[NAMEI_RA_SIZE];
 	unsigned long offset;
-	int block, toread, i, err;
+	int block, toread, i, err, bs;
 
 	*res_dir = NULL;
 	if (!dir)
 		return NULL;
 	sb = dir->i_sb;
+	bs = BYTE_SWAP(sb->u.ext2_sb.s_byte_swapped);
 
 	if (namelen > EXT2_NAME_LEN)
 		return NULL;
@@ -119,9 +120,9 @@ static struct buffer_head * ext2_find_entry (struct inode * dir,
 		dlimit = bh->b_data + sb->s_blocksize;
 		while ((char *) de < dlimit) {
 			if (!ext2_check_dir_entry ("ext2_find_entry", dir,
-						   de, bh, offset))
+						   de, bh, offset, bs))
 				goto failure;
-			if (de->inode != 0 && ext2_match (namelen, name, de)) {
+			if (de->inode != 0 && ext2_match (namelen, name, de, bs)) {
 				for (i = 0; i < NAMEI_RA_SIZE; ++i) {
 					if (bh_use[i] != bh)
 						brelse (bh_use[i]);
@@ -129,9 +130,9 @@ static struct buffer_head * ext2_find_entry (struct inode * dir,
 				*res_dir = de;
 				return bh;
 			}
-			offset += de->rec_len;
+			offset += e_swab (bs, de->rec_len);
 			de = (struct ext2_dir_entry *)
-				((char *) de + de->rec_len);
+				((char *) de + e_swab (bs, de->rec_len));
 		}
 
 		brelse (bh);
@@ -188,7 +189,7 @@ int ext2_lookup (struct inode * dir, const char * name, int len,
 		iput (dir);
 		return -ENOENT;
 	}
-	ino = de->inode;
+	ino = e_swab (BYTE_SWAP(dir->i_sb->u.ext2_sb.s_byte_swapped), de->inode);
 	dcache_add(dir, name, len, ino);
 	brelse (bh);
 	if (!(*result = iget (dir->i_sb, ino))) {
@@ -219,12 +220,14 @@ static struct buffer_head * ext2_add_entry (struct inode * dir,
 	struct buffer_head * bh;
 	struct ext2_dir_entry * de, * de1;
 	struct super_block * sb;
+	int bs;
 
 	*err = -EINVAL;
 	*res_dir = NULL;
 	if (!dir)
 		return NULL;
 	sb = dir->i_sb;
+	bs = BYTE_SWAP(sb->u.ext2_sb.s_byte_swapped);
 
 	if (namelen > EXT2_NAME_LEN)
 	{
@@ -266,7 +269,7 @@ static struct buffer_head * ext2_add_entry (struct inode * dir,
 
 				de = (struct ext2_dir_entry *) bh->b_data;
 				de->inode = 0;
-				de->rec_len = sb->s_blocksize;
+				e_set_swab (bs, de->rec_len, sb->s_blocksize);
 				dir->i_size = offset + sb->s_blocksize;
 				dir->i_dirt = 1;
 			} else {
@@ -277,29 +280,32 @@ static struct buffer_head * ext2_add_entry (struct inode * dir,
 			}
 		}
 		if (!ext2_check_dir_entry ("ext2_add_entry", dir, de, bh,
-					   offset)) {
+					   offset, bs)) {
 			*err = -ENOENT;
 			brelse (bh);
 			return NULL;
 		}
-		if (de->inode != 0 && ext2_match (namelen, name, de)) {
+		if (de->inode != 0 && ext2_match (namelen, name, de, bs)) {
 				*err = -EEXIST;
 				brelse (bh);
 				return NULL;
 		}
-		if ((de->inode == 0 && de->rec_len >= rec_len) ||
-		    (de->rec_len >= EXT2_DIR_REC_LEN(de->name_len) + rec_len)) {
-			offset += de->rec_len;
+		if ((de->inode == 0 && e_swab (bs, de->rec_len) >= rec_len) ||
+		    (e_swab (bs, de->rec_len) >=
+		     EXT2_DIR_REC_LEN(e_swab (bs, de->name_len)) + rec_len)) {
+			offset += e_swab (bs, de->rec_len);
 			if (de->inode) {
 				de1 = (struct ext2_dir_entry *) ((char *) de +
-					EXT2_DIR_REC_LEN(de->name_len));
-				de1->rec_len = de->rec_len -
-					EXT2_DIR_REC_LEN(de->name_len);
-				de->rec_len = EXT2_DIR_REC_LEN(de->name_len);
+					EXT2_DIR_REC_LEN(e_swab (bs, de->name_len)));
+				e_set_swab (bs, de1->rec_len,
+					    e_swab (bs, de->rec_len) -
+					    EXT2_DIR_REC_LEN(e_swab (bs, de->name_len)));
+				e_set_swab (bs, de->rec_len,
+					    EXT2_DIR_REC_LEN(e_swab (bs, de->name_len)));
 				de = de1;
 			}
 			de->inode = 0;
-			de->name_len = namelen;
+			e_set_swab (bs, de->name_len, namelen);
 			memcpy (de->name, name, namelen);
 			/*
 			 * XXX shouldn't update any times until successful
@@ -320,8 +326,8 @@ static struct buffer_head * ext2_add_entry (struct inode * dir,
 			*err = 0;
 			return bh;
 		}
-		offset += de->rec_len;
-		de = (struct ext2_dir_entry *) ((char *) de + de->rec_len);
+		offset += e_swab (bs, de->rec_len);
+		de = (struct ext2_dir_entry *) ((char *) de + e_swab (bs, de->rec_len));
 	}
 	brelse (bh);
 	return NULL;
@@ -332,7 +338,7 @@ static struct buffer_head * ext2_add_entry (struct inode * dir,
  * previous entry
  */
 static int ext2_delete_entry (struct ext2_dir_entry * dir,
-			      struct buffer_head * bh)
+			      struct buffer_head * bh, int bs)
 {
 	struct ext2_dir_entry * de, * pde;
 	int i;
@@ -342,17 +348,19 @@ static int ext2_delete_entry (struct ext2_dir_entry * dir,
 	de = (struct ext2_dir_entry *) bh->b_data;
 	while (i < bh->b_size) {
 		if (!ext2_check_dir_entry ("ext2_delete_entry", NULL, 
-					   de, bh, i))
+					   de, bh, i, bs))
 			return -EIO;
 		if (de == dir)  {
 			if (pde)
-				pde->rec_len += dir->rec_len;
+				e_set_swab (bs, pde->rec_len,
+					    e_swab (bs, pde->rec_len) +
+					    e_swab (bs, dir->rec_len));
 			dir->inode = 0;
 			return 0;
 		}
-		i += de->rec_len;
+		i += e_swab (bs, de->rec_len);
 		pde = de;
-		de = (struct ext2_dir_entry *) ((char *) de + de->rec_len);
+		de = (struct ext2_dir_entry *) ((char *) de + e_swab (bs, de->rec_len));
 	}
 	return -ENOENT;
 }
@@ -364,6 +372,7 @@ int ext2_create (struct inode * dir,const char * name, int len, int mode,
 	struct buffer_head * bh;
 	struct ext2_dir_entry * de;
 	int err;
+	int bs = BYTE_SWAP(dir->i_sb->u.ext2_sb.s_byte_swapped);
 
 	*result = NULL;
 	if (!dir)
@@ -384,9 +393,9 @@ int ext2_create (struct inode * dir,const char * name, int len, int mode,
 		iput (dir);
 		return err;
 	}
-	de->inode = inode->i_ino;
+	e_set_swab (bs, de->inode, inode->i_ino);
 	dir->i_version = ++event;
-	dcache_add(dir, de->name, de->name_len, de->inode);
+	dcache_add(dir, de->name, e_swab (bs, de->name_len), inode->i_ino);
 	mark_buffer_dirty(bh, 1);
 	if (IS_SYNC(dir)) {
 		ll_rw_block (WRITE, 1, &bh);
@@ -405,6 +414,7 @@ int ext2_mknod (struct inode * dir, const char * name, int len, int mode,
 	struct buffer_head * bh;
 	struct ext2_dir_entry * de;
 	int err;
+	int bs = BYTE_SWAP(dir->i_sb->u.ext2_sb.s_byte_swapped);
 
 	if (!dir)
 		return -ENOENT;
@@ -453,9 +463,9 @@ int ext2_mknod (struct inode * dir, const char * name, int len, int mode,
 		iput (dir);
 		return err;
 	}
-	de->inode = inode->i_ino;
+	e_set_swab (bs, de->inode, inode->i_ino);
 	dir->i_version = ++event;
-	dcache_add(dir, de->name, de->name_len, de->inode);
+	dcache_add(dir, de->name, e_swab (bs, de->name_len), inode->i_ino);
 	mark_buffer_dirty(bh, 1);
 	if (IS_SYNC(dir)) {
 		ll_rw_block (WRITE, 1, &bh);
@@ -473,6 +483,7 @@ int ext2_mkdir (struct inode * dir, const char * name, int len, int mode)
 	struct buffer_head * bh, * dir_block;
 	struct ext2_dir_entry * de;
 	int err;
+	int bs = BYTE_SWAP(dir->i_sb->u.ext2_sb.s_byte_swapped);
 
 	if (!dir)
 		return -ENOENT;
@@ -507,14 +518,14 @@ int ext2_mkdir (struct inode * dir, const char * name, int len, int mode)
 	}
 	inode->i_blocks = inode->i_sb->s_blocksize / 512;
 	de = (struct ext2_dir_entry *) dir_block->b_data;
-	de->inode = inode->i_ino;
-	de->name_len = 1;
-	de->rec_len = EXT2_DIR_REC_LEN(de->name_len);
+	e_set_swab (bs, de->inode, inode->i_ino);
+	e_set_swab (bs, de->name_len, 1);
+	e_set_swab (bs, de->rec_len, EXT2_DIR_REC_LEN(e_swab (bs, de->name_len)));
 	strcpy (de->name, ".");
-	de = (struct ext2_dir_entry *) ((char *) de + de->rec_len);
-	de->inode = dir->i_ino;
-	de->rec_len = inode->i_sb->s_blocksize - EXT2_DIR_REC_LEN(1);
-	de->name_len = 2;
+	de = (struct ext2_dir_entry *) ((char *) de + e_swab (bs, de->rec_len));
+	e_set_swab (bs, de->inode, dir->i_ino);
+	e_set_swab (bs, de->rec_len, inode->i_sb->s_blocksize - EXT2_DIR_REC_LEN(1));
+	e_set_swab (bs, de->name_len, 2);
 	strcpy (de->name, "..");
 	inode->i_nlink = 2;
 	mark_buffer_dirty(dir_block, 1);
@@ -531,9 +542,9 @@ int ext2_mkdir (struct inode * dir, const char * name, int len, int mode)
 		iput (inode);
 		return err;
 	}
-	de->inode = inode->i_ino;
+	e_set_swab (bs, de->inode, inode->i_ino);
 	dir->i_version = ++event;
-	dcache_add(dir, de->name, de->name_len, de->inode);
+	dcache_add(dir, de->name, e_swab (bs, de->name_len), inode->i_ino);
 	mark_buffer_dirty(bh, 1);
 	if (IS_SYNC(dir)) {
 		ll_rw_block (WRITE, 1, &bh);
@@ -556,9 +567,10 @@ static int empty_dir (struct inode * inode)
 	struct buffer_head * bh;
 	struct ext2_dir_entry * de, * de1;
 	struct super_block * sb;
-	int err;
+	int err, bs;
 
 	sb = inode->i_sb;
+	bs = BYTE_SWAP(sb->u.ext2_sb.s_byte_swapped);
 	if (inode->i_size < EXT2_DIR_REC_LEN(1) + EXT2_DIR_REC_LEN(2) ||
 	    !(bh = ext2_bread (inode, 0, 0, &err))) {
 	    	ext2_warning (inode->i_sb, "empty_dir",
@@ -567,8 +579,8 @@ static int empty_dir (struct inode * inode)
 		return 1;
 	}
 	de = (struct ext2_dir_entry *) bh->b_data;
-	de1 = (struct ext2_dir_entry *) ((char *) de + de->rec_len);
-	if (de->inode != inode->i_ino || !de1->inode || 
+	de1 = (struct ext2_dir_entry *) ((char *) de + e_swab (bs, de->rec_len));
+	if (e_swab (bs, de->inode) != inode->i_ino || !de1->inode || 
 	    strcmp (".", de->name) || strcmp ("..", de1->name)) {
 	    	ext2_warning (inode->i_sb, "empty_dir",
 			      "bad directory (dir #%lu) - no `.' or `..'",
@@ -576,8 +588,8 @@ static int empty_dir (struct inode * inode)
 		brelse (bh);
 		return 1;
 	}
-	offset = de->rec_len + de1->rec_len;
-	de = (struct ext2_dir_entry *) ((char *) de1 + de1->rec_len);
+	offset = e_swab (bs, de->rec_len) + e_swab (bs, de1->rec_len);
+	de = (struct ext2_dir_entry *) ((char *) de1 + e_swab (bs, de1->rec_len));
 	while (offset < inode->i_size ) {
 		if (!bh || (void *) de >= (void *) (bh->b_data + sb->s_blocksize)) {
 			brelse (bh);
@@ -592,7 +604,7 @@ static int empty_dir (struct inode * inode)
 			de = (struct ext2_dir_entry *) bh->b_data;
 		}
 		if (!ext2_check_dir_entry ("empty_dir", inode, de, bh,
-					   offset)) {
+					   offset, bs)) {
 			brelse (bh);
 			return 1;
 		}
@@ -600,8 +612,8 @@ static int empty_dir (struct inode * inode)
 			brelse (bh);
 			return 0;
 		}
-		offset += de->rec_len;
-		de = (struct ext2_dir_entry *) ((char *) de + de->rec_len);
+		offset += e_swab (bs, de->rec_len);
+		de = (struct ext2_dir_entry *) ((char *) de + e_swab (bs, de->rec_len));
 	}
 	brelse (bh);
 	return 1;
@@ -613,6 +625,7 @@ int ext2_rmdir (struct inode * dir, const char * name, int len)
 	struct inode * inode;
 	struct buffer_head * bh;
 	struct ext2_dir_entry * de;
+	int bs = BYTE_SWAP(dir->i_sb->u.ext2_sb.s_byte_swapped);
 
 repeat:
 	if (!dir)
@@ -627,7 +640,7 @@ repeat:
 	if (!bh)
 		goto end_rmdir;
 	retval = -EPERM;
-	if (!(inode = iget (dir->i_sb, de->inode)))
+	if (!(inode = iget (dir->i_sb, e_swab (bs, de->inode))))
 		goto end_rmdir;
 	if (inode->i_sb->dq_op)
 		inode->i_sb->dq_op->initialize (inode, -1);
@@ -635,7 +648,7 @@ repeat:
 		retval = -EBUSY;
 		goto end_rmdir;
 	}
-	if (de->inode != inode->i_ino) {
+	if (e_swab (bs, de->inode) != inode->i_ino) {
 		iput(inode);
 		brelse(bh);
 		current->counter = 0;
@@ -655,7 +668,7 @@ repeat:
 	down(&inode->i_sem);
 	if (!empty_dir (inode))
 		retval = -ENOTEMPTY;
-	else if (de->inode != inode->i_ino)
+	else if (e_swab (bs, de->inode) != inode->i_ino)
 		retval = -ENOENT;
 	else {
 		if (inode->i_count > 1) {
@@ -668,7 +681,7 @@ repeat:
 		 */
 			inode->i_size = 0;
 		}
-		retval = ext2_delete_entry (de, bh);
+		retval = ext2_delete_entry (de, bh, bs);
 		dir->i_version = ++event;
 	}
 	up(&inode->i_sem);
@@ -702,6 +715,7 @@ int ext2_unlink (struct inode * dir, const char * name, int len)
 	struct inode * inode;
 	struct buffer_head * bh;
 	struct ext2_dir_entry * de;
+	int bs = BYTE_SWAP(dir->i_sb->u.ext2_sb.s_byte_swapped);
 
 repeat:
 	if (!dir)
@@ -715,7 +729,7 @@ repeat:
 	bh = ext2_find_entry (dir, name, len, &de);
 	if (!bh)
 		goto end_unlink;
-	if (!(inode = iget (dir->i_sb, de->inode)))
+	if (!(inode = iget (dir->i_sb, e_swab (bs, de->inode))))
 		goto end_unlink;
 	if (inode->i_sb->dq_op)
 		inode->i_sb->dq_op->initialize (inode, -1);
@@ -724,7 +738,7 @@ repeat:
 		goto end_unlink;
 	if (IS_APPEND(inode) || IS_IMMUTABLE(inode))
 		goto end_unlink;
-	if (de->inode != inode->i_ino) {
+	if (e_swab (bs, de->inode) != inode->i_ino) {
 		iput(inode);
 		brelse(bh);
 		current->counter = 0;
@@ -741,7 +755,7 @@ repeat:
 			      inode->i_ino, inode->i_nlink);
 		inode->i_nlink = 1;
 	}
-	retval = ext2_delete_entry (de, bh);
+	retval = ext2_delete_entry (de, bh, bs);
 	if (retval)
 		goto end_unlink;
 	dir->i_version = ++event;
@@ -773,6 +787,7 @@ int ext2_symlink (struct inode * dir, const char * name, int len,
 	int i, err;
 	int l;
 	char c;
+	int bs = BYTE_SWAP(dir->i_sb->u.ext2_sb.s_byte_swapped);
 
 	if (!(inode = ext2_new_inode (dir, S_IFLNK, &err))) {
 		iput (dir);
@@ -830,9 +845,9 @@ int ext2_symlink (struct inode * dir, const char * name, int len,
 		iput (dir);
 		return err;
 	}
-	de->inode = inode->i_ino;
+	e_set_swab (bs, de->inode, inode->i_ino);
 	dir->i_version = ++event;
-	dcache_add(dir, de->name, de->name_len, de->inode);
+	dcache_add(dir, de->name, e_swab (bs, de->name_len), inode->i_ino);
 	mark_buffer_dirty(bh, 1);
 	if (IS_SYNC(dir)) {
 		ll_rw_block (WRITE, 1, &bh);
@@ -850,6 +865,7 @@ int ext2_link (struct inode * oldinode, struct inode * dir,
 	struct ext2_dir_entry * de;
 	struct buffer_head * bh;
 	int err;
+	int bs = BYTE_SWAP(dir->i_sb->u.ext2_sb.s_byte_swapped);
 
 	if (S_ISDIR(oldinode->i_mode)) {
 		iput (oldinode);
@@ -879,9 +895,9 @@ int ext2_link (struct inode * oldinode, struct inode * dir,
 		iput (oldinode);
 		return err;
 	}
-	de->inode = oldinode->i_ino;
+	e_set_swab (bs, de->inode, oldinode->i_ino);
 	dir->i_version = ++event;
-	dcache_add(dir, de->name, de->name_len, de->inode);
+	dcache_add(dir, de->name, e_swab (bs, de->name_len), oldinode->i_ino);
 	mark_buffer_dirty(bh, 1);
 	if (IS_SYNC(dir)) {
 		ll_rw_block (WRITE, 1, &bh);
@@ -920,13 +936,13 @@ static int subdir (struct inode * new_inode, struct inode * old_inode)
 	return result;
 }
 
-#define PARENT_INO(buffer) \
+#define PARENT_INO(bs, buffer) \
 	((struct ext2_dir_entry *) ((char *) buffer + \
-	((struct ext2_dir_entry *) buffer)->rec_len))->inode
+	e_swab (bs, ((struct ext2_dir_entry *) buffer)->rec_len)))->inode
 
-#define PARENT_NAME(buffer) \
+#define PARENT_NAME(bs, buffer) \
 	((struct ext2_dir_entry *) ((char *) buffer + \
-	((struct ext2_dir_entry *) buffer)->rec_len))->name
+	e_swab (bs, ((struct ext2_dir_entry *) buffer)->rec_len)))->name
 
 /*
  * rename uses retrying to avoid race-conditions: at least they should be
@@ -948,11 +964,12 @@ static int do_ext2_rename (struct inode * old_dir, const char * old_name,
 	struct buffer_head * old_bh, * new_bh, * dir_bh;
 	struct ext2_dir_entry * old_de, * new_de;
 	int retval;
+	int bs = BYTE_SWAP(old_dir->i_sb->u.ext2_sb.s_byte_swapped);
 
 	goto start_up;
 try_again:
 	if (new_bh && new_de) {
-		ext2_delete_entry(new_de, new_bh);
+		ext2_delete_entry(new_de, new_bh, bs);
 		new_dir->i_version = ++event;
 	}
 	brelse (old_bh);
@@ -974,7 +991,7 @@ start_up:
 	retval = -ENOENT;
 	if (!old_bh)
 		goto end_rename;
-	old_inode = __iget (old_dir->i_sb, old_de->inode, 0); /* don't cross mnt-points */
+	old_inode = __iget (old_dir->i_sb, e_swab (bs, old_de->inode), 0); /* don't cross mnt-points */
 	if (!old_inode)
 		goto end_rename;
 	if (must_be_dir && !S_ISDIR(old_inode->i_mode))
@@ -988,7 +1005,7 @@ start_up:
 		goto end_rename;
 	new_bh = ext2_find_entry (new_dir, new_name, new_len, &new_de);
 	if (new_bh) {
-		new_inode = __iget (new_dir->i_sb, new_de->inode, 0); /* no mntp cross */
+		new_inode = __iget (new_dir->i_sb, e_swab (bs, new_de->inode), 0); /* no mntp cross */
 		if (!new_inode) {
 			brelse (new_bh);
 			new_bh = NULL;
@@ -1035,7 +1052,7 @@ start_up:
 		dir_bh = ext2_bread (old_inode, 0, 0, &retval);
 		if (!dir_bh)
 			goto end_rename;
-		if (PARENT_INO(dir_bh->b_data) != old_dir->i_ino)
+		if (e_swab (bs, PARENT_INO(bs, dir_bh->b_data)) != old_dir->i_ino)
 			goto end_rename;
 		retval = -EMLINK;
 		if (!new_inode && new_dir->i_nlink >= EXT2_LINK_MAX)
@@ -1050,18 +1067,19 @@ start_up:
 	/*
 	 * sanity checking before doing the rename - avoid races
 	 */
-	if (new_inode && (new_de->inode != new_inode->i_ino))
+	if (new_inode && (e_swab (bs, new_de->inode) != new_inode->i_ino))
 		goto try_again;
 	if (new_de->inode && !new_inode)
 		goto try_again;
-	if (old_de->inode != old_inode->i_ino)
+	if (e_swab (bs, old_de->inode) != old_inode->i_ino)
 		goto try_again;
 	/*
 	 * ok, that's it
 	 */
-	new_de->inode = old_inode->i_ino;
-	dcache_add(new_dir, new_de->name, new_de->name_len, new_de->inode);
-	retval = ext2_delete_entry (old_de, old_bh);
+	e_set_swab (bs, new_de->inode, old_inode->i_ino);
+	dcache_add(new_dir, new_de->name, e_swab (bs, new_de->name_len),
+		   old_inode->i_ino);
+	retval = ext2_delete_entry (old_de, old_bh, bs);
 	if (retval == -ENOENT)
 		goto try_again;
 	if (retval)
@@ -1075,7 +1093,7 @@ start_up:
 	old_dir->i_ctime = old_dir->i_mtime = CURRENT_TIME;
 	old_dir->i_dirt = 1;
 	if (dir_bh) {
-		PARENT_INO(dir_bh->b_data) = new_dir->i_ino;
+		e_set_swab (bs, PARENT_INO(bs, dir_bh->b_data), new_dir->i_ino);
 		dcache_add(old_inode, "..", 2, new_dir->i_ino);
 		mark_buffer_dirty(dir_bh, 1);
 		old_dir->i_nlink--;

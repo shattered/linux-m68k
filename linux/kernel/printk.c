@@ -40,6 +40,10 @@ unsigned long log_size = 0;
 struct wait_queue * log_wait = NULL;
 int console_loglevel = DEFAULT_CONSOLE_LOGLEVEL;
 
+#ifdef __mc68000__
+#include <asm/machdep.h>
+void (*debug_print_proc)(const char *) = 0;
+#endif
 static void (*console_print_proc)(const char *) = 0;
 static char log_buf[LOG_BUF_LEN];
 static unsigned long log_start = 0;
@@ -141,6 +145,10 @@ asmlinkage int sys_syslog(int type, char * buf, int len)
 			if (len < MINIMUM_CONSOLE_LOGLEVEL)
 				len = MINIMUM_CONSOLE_LOGLEVEL;
 			console_loglevel = len;
+#ifdef __mc68000__
+			if (len == 8)
+				mach_debug_init();
+#endif
 			return 0;
 	}
 	return -EINVAL;
@@ -196,6 +204,14 @@ asmlinkage int printk(const char *fmt, ...)
 			(*console_print_proc)(msg);
 			p[1] = tmp;
 		}
+#ifdef __mc68000__
+		if ((msg_level == 0 || console_loglevel >= 8) && debug_print_proc) {
+			char tmp = p[1];
+			p[1] = '\0';
+			(*debug_print_proc)(msg);
+			p[1] = tmp;
+		}
+#endif
 		if (*p == '\n')
 			msg_level = -1;
 	}

@@ -20,7 +20,7 @@
  *
  * It is easy to extend ide.c to handle more than four interfaces:
  *
- *	Change the MAX_HWIFS constant in ide.h.
+ *	Change the MAX_HWIFS constant in include/asm/ide.h.
  *
  *	Define some new major numbers (in major.h), and insert them into
  *	the ide_hwif_to_major table in ide.c.
@@ -302,6 +302,7 @@
 #include <linux/genhd.h>
 #include <linux/malloc.h>
 
+#include <asm/setup.h>
 #include <asm/byteorder.h>
 #include <asm/irq.h>
 #include <asm/segment.h>
@@ -322,9 +323,15 @@
 #define IS_PROMISE_DRIVE (0)	/* auto-NULLs out Promise code */
 #endif /* CONFIG_BLK_DEV_PROMISE */
 
+#if (MAX_HWIFS > 1)	/* We only consider the cases 1 and 4 */
 static const byte	ide_hwif_to_major[MAX_HWIFS] = {IDE0_MAJOR, IDE1_MAJOR, IDE2_MAJOR, IDE3_MAJOR};
 static const unsigned short default_io_base[MAX_HWIFS] = {0x1f0, 0x170, 0x1e8, 0x168};
-static const byte	default_irqs[MAX_HWIFS]     = {14, 15, 11, 10};
+static const int	default_irqs[MAX_HWIFS]     = {14, 15, 11, 10};
+#else
+static const byte	ide_hwif_to_major[MAX_HWIFS] = {IDE0_MAJOR};
+static const unsigned short default_io_base[MAX_HWIFS] = {0x1f0};
+static const int	default_irqs[MAX_HWIFS]     = {14};
+#endif
 static int	idebus_parameter; /* holds the "idebus=" parameter */
 static int	system_bus_speed; /* holds what we think is VESA/PCI bus speed */
 
@@ -383,7 +390,7 @@ static void init_hwif_data (unsigned int index)
 
 	/* fill in any non-zero initial values */
 	hwif->index     = index;
-	hwif->io_base	= default_io_base[index];
+	hwif->io_base	= (ide_ioreg_t) default_io_base[index];
 	hwif->ctl_port	= hwif->io_base ? hwif->io_base+0x206 : 0x000;
 #ifdef CONFIG_BLK_DEV_HD
 	if (hwif->io_base == HD_DATA)
@@ -487,32 +494,30 @@ static inline void do_vlb_sync (unsigned short port) {
  */
 void ide_input_data (ide_drive_t *drive, void *buffer, unsigned int wcount)
 {
-	unsigned short io_base  = HWIF(drive)->io_base;
-	unsigned short data_reg = io_base+IDE_DATA_OFFSET;
 	byte io_32bit = drive->io_32bit;
 
 	if (io_32bit) {
 #if SUPPORT_VLB_SYNC
 		if (io_32bit & 2) {
 			cli();
-			do_vlb_sync(io_base+IDE_NSECTOR_OFFSET);
-			insl(data_reg, buffer, wcount);
+			do_vlb_sync(IDE_NSECTOR_REG);
+			insl(IDE_DATA_REG, buffer, wcount);
 			if (drive->unmask)
-				sti();
+				STI();
 		} else
 #endif /* SUPPORT_VLB_SYNC */
-			insl(data_reg, buffer, wcount);
+			insl(IDE_DATA_REG, buffer, wcount);
 	} else {
 #if SUPPORT_SLOW_DATA_PORTS
 		if (drive->slow) {
 			unsigned short *ptr = (unsigned short *) buffer;
 			while (wcount--) {
-				*ptr++ = inw_p(data_reg);
-				*ptr++ = inw_p(data_reg);
+				*ptr++ = inw_p(IDE_DATA_REG);
+				*ptr++ = inw_p(IDE_DATA_REG);
 			}
 		} else
 #endif /* SUPPORT_SLOW_DATA_PORTS */
-			insw(data_reg, buffer, wcount<<1);
+			insw(IDE_DATA_REG, buffer, wcount<<1);
 	}
 }
 
@@ -521,34 +526,59 @@ void ide_input_data (ide_drive_t *drive, void *buffer, unsigned int wcount)
  */
 void ide_output_data (ide_drive_t *drive, void *buffer, unsigned int wcount)
 {
-	unsigned short io_base  = HWIF(drive)->io_base;
-	unsigned short data_reg = io_base+IDE_DATA_OFFSET;
 	byte io_32bit = drive->io_32bit;
 
 	if (io_32bit) {
 #if SUPPORT_VLB_SYNC
 		if (io_32bit & 2) {
 			cli();
-			do_vlb_sync(io_base+IDE_NSECTOR_OFFSET);
-			outsl(data_reg, buffer, wcount);
+			do_vlb_sync(IDE_NSECTOR_REG);
+			outsl(IDE_DATA_REG, buffer, wcount);
 			if (drive->unmask)
-				sti();
+				STI();
 		} else
 #endif /* SUPPORT_VLB_SYNC */
-			outsl(data_reg, buffer, wcount);
+			outsl(IDE_DATA_REG, buffer, wcount);
 	} else {
 #if SUPPORT_SLOW_DATA_PORTS
 		if (drive->slow) {
 			unsigned short *ptr = (unsigned short *) buffer;
 			while (wcount--) {
-				outw_p(*ptr++, data_reg);
-				outw_p(*ptr++, data_reg);
+				outw_p(*ptr++, IDE_DATA_REG);
+				outw_p(*ptr++, IDE_DATA_REG);
 			}
 		} else
 #endif /* SUPPORT_SLOW_DATA_PORTS */
-			outsw(data_reg, buffer, wcount<<1);
+			outsw(IDE_DATA_REG, buffer, wcount<<1);
 	}
 }
+
+#ifdef CONFIG_ATARI
+/*
+ * These are needed by ATAPI drivers for Atari's byte-swapped interface
+ */
+void
+ide_input_data_swap (ide_drive_t *drive, void *buffer, unsigned int wcount)
+{
+	byte io_32bit = drive->io_32bit;
+
+	if (io_32bit)
+		insl_swapw(IDE_DATA_REG, buffer, wcount);
+	else
+		insw_swapw(IDE_DATA_REG, buffer, wcount<<1);
+}
+
+void
+ide_output_data_swap (ide_drive_t *drive, void *buffer, unsigned int wcount)
+{
+	byte io_32bit = drive->io_32bit;
+
+	if (io_32bit)
+		outsl_swapw(IDE_DATA_REG, buffer, wcount);
+	else
+		outsw_swapw(IDE_DATA_REG, buffer, wcount<<1);
+}
+#endif /* CONFIG_ATARI */
 
 /*
  * The following routines are mainly used by the ATAPI drivers.
@@ -824,11 +854,11 @@ static void reset_pollfunc (ide_drive_t *drive)
  * individually reset without clobbering other devices on the same interface.
  *
  * Unfortunately, the IDE interface does not generate an interrupt to let
- * us know when the reset operation has finished, so we must poll for this.
- * Equally poor, though, is the fact that this may a very long time to complete,
- * (up to 30 seconds worstcase).  So, instead of busy-waiting here for it,
- * we set a timer to poll at 50ms intervals.
- */
+ * us know when the reset operation has finished, so we must poll for this. 
+ * Equally poor, though, is the fact that this may take a very long time to
+ * complete, (up to 30 seconds worstcase).  So, instead of busy-waiting here
+ * for it, we set a timer to poll at 50ms intervals.
+ */ 
 static void do_reset1 (ide_drive_t *drive, int  do_not_try_atapi)
 {
 	unsigned int unit;
@@ -954,7 +984,7 @@ byte ide_dump_status (ide_drive_t *drive, const char *msg, byte stat)
 	byte err = 0;
 
 	save_flags (flags);
-	sti();
+	STI();
 	printk("%s: %s: status=0x%02x", drive->name, msg, stat);
 #if FANCY_STATUS_DUMPS
 	if (drive->media == ide_disk) {
@@ -1114,6 +1144,16 @@ static void read_intr (ide_drive_t *drive)
 	unsigned int msect, nsect;
 	struct request *rq;
 
+#ifdef CONFIG_AMIGA
+	if (MACH_IS_AMIGA) {
+		unsigned long timeout = 1*HZ;
+		timeout += jiffies;
+		do {
+			if (!(GET_STAT() & BUSY_STAT))
+				break;
+		} while (jiffies <= timeout);
+	}
+#endif /* CONFIG_AMIGA */
 	if (!OK_STAT(stat=GET_STAT(),DATA_READY,BAD_R_STAT)) {
 		ide_error(drive, "read_intr", stat);
 		return;
@@ -1155,6 +1195,17 @@ static void write_intr (ide_drive_t *drive)
 	int i;
 	ide_hwgroup_t *hwgroup = HWGROUP(drive);
 	struct request *rq = hwgroup->rq;
+
+#ifdef CONFIG_AMIGA
+	if (MACH_IS_AMIGA) {
+		unsigned long timeout = 1*HZ;
+		timeout += jiffies;
+		do {
+			if (!(GET_STAT() & BUSY_STAT))
+				break;
+		} while (jiffies <= timeout);
+	}
+#endif /* CONFIG_AMIGA */
 
 	if (OK_STAT(stat=GET_STAT(),DRIVE_READY,drive->bad_wstat)) {
 #ifdef DEBUG
@@ -1226,6 +1277,17 @@ static void multwrite_intr (ide_drive_t *drive)
 	ide_hwgroup_t *hwgroup = HWGROUP(drive);
 	struct request *rq = &hwgroup->wrq;
 
+#ifdef CONFIG_AMIGA
+	if (MACH_IS_AMIGA) {
+		unsigned long timeout = 1*HZ;
+		timeout += jiffies;
+		do {
+			if (!(GET_STAT() & BUSY_STAT))
+				break;
+		} while (jiffies <= timeout);
+	}
+#endif /* CONFIG_AMIGA */
+
 	if (OK_STAT(stat=GET_STAT(),DRIVE_READY,drive->bad_wstat)) {
 		if (stat & DRQ_STAT) {
 			if (rq->nr_sectors) {
@@ -1266,7 +1328,7 @@ static void set_multmode_intr (ide_drive_t *drive)
 {
 	byte stat = GET_STAT();
 
-	sti();
+	STI();
 	if (OK_STAT(stat,READY_STAT,BAD_STAT)) {
 		drive->mult_count = drive->mult_req;
 	} else {
@@ -1283,7 +1345,7 @@ static void set_geometry_intr (ide_drive_t *drive)
 {
 	byte stat = GET_STAT();
 
-	sti();
+	STI();
 	if (!OK_STAT(stat,READY_STAT,BAD_STAT))
 		ide_error(drive, "set_geometry_intr", stat);
 }
@@ -1295,7 +1357,7 @@ static void recal_intr (ide_drive_t *drive)
 {
 	byte stat = GET_STAT();
 
-	sti();
+	STI();
 	if (!OK_STAT(stat,READY_STAT,BAD_STAT))
 		ide_error(drive, "recal_intr", stat);
 }
@@ -1322,7 +1384,7 @@ static void drive_cmd_intr (ide_drive_t *drive)
 	byte *args = (byte *) rq->buffer;
 	byte stat = GET_STAT();
 
-	sti();
+	STI();
 	if ((stat & DRQ_STAT) && args && args[3]) {
 		byte io_32bit = drive->io_32bit;
 		drive->io_32bit = 0;
@@ -1430,14 +1492,12 @@ int ide_wait_stat (ide_drive_t *drive, byte good, byte bad, unsigned long timeou
  */
 static inline void do_rw_disk (ide_drive_t *drive, struct request *rq, unsigned long block)
 {
-	ide_hwif_t *hwif = HWIF(drive);
-	unsigned short io_base = hwif->io_base;
 #ifdef CONFIG_BLK_DEV_PROMISE
 	int use_promise_io = 0;
 #endif /* CONFIG_BLK_DEV_PROMISE */
 
 	OUT_BYTE(drive->ctl,IDE_CONTROL_REG);
-	OUT_BYTE(rq->nr_sectors,io_base+IDE_NSECTOR_OFFSET);
+	OUT_BYTE(rq->nr_sectors,IDE_NSECTOR_REG);
 #ifdef CONFIG_BLK_DEV_PROMISE
 	if (IS_PROMISE_DRIVE) {
 		if (hwif->is_promise2 || rq->cmd == READ) {
@@ -1453,20 +1513,20 @@ static inline void do_rw_disk (ide_drive_t *drive, struct request *rq, unsigned 
 			drive->name, (rq->cmd==READ)?"read":"writ",
 			block, rq->nr_sectors, (unsigned long) rq->buffer);
 #endif
-		OUT_BYTE(block,io_base+IDE_SECTOR_OFFSET);
-		OUT_BYTE(block>>=8,io_base+IDE_LCYL_OFFSET);
-		OUT_BYTE(block>>=8,io_base+IDE_HCYL_OFFSET);
-		OUT_BYTE(((block>>8)&0x0f)|drive->select.all,io_base+IDE_SELECT_OFFSET);
+		OUT_BYTE(block,IDE_SECTOR_REG);
+		OUT_BYTE(block>>=8,IDE_LCYL_REG);
+		OUT_BYTE(block>>=8,IDE_HCYL_REG);
+		OUT_BYTE(((block>>8)&0x0f)|drive->select.all,IDE_SELECT_REG);
 	} else {
 		unsigned int sect,head,cyl,track;
 		track = block / drive->sect;
 		sect  = block % drive->sect + 1;
-		OUT_BYTE(sect,io_base+IDE_SECTOR_OFFSET);
+		OUT_BYTE(sect,IDE_SECTOR_REG);
 		head  = track % drive->head;
 		cyl   = track / drive->head;
-		OUT_BYTE(cyl,io_base+IDE_LCYL_OFFSET);
-		OUT_BYTE(cyl>>8,io_base+IDE_HCYL_OFFSET);
-		OUT_BYTE(head|drive->select.all,io_base+IDE_SELECT_OFFSET);
+		OUT_BYTE(cyl,IDE_LCYL_REG);
+		OUT_BYTE(cyl>>8,IDE_HCYL_REG);
+		OUT_BYTE(head|drive->select.all,IDE_SELECT_REG);
 #ifdef DEBUG
 		printk("%s: %sing: CHS=%d/%d/%d, sectors=%ld, buffer=0x%08lx\n",
 			drive->name, (rq->cmd==READ)?"read":"writ", cyl,
@@ -1485,7 +1545,7 @@ static inline void do_rw_disk (ide_drive_t *drive, struct request *rq, unsigned 
 			return;
 #endif /* CONFIG_BLK_DEV_TRITON */
 		ide_set_handler(drive, &read_intr, WAIT_CMD);
-		OUT_BYTE(drive->mult_count ? WIN_MULTREAD : WIN_READ, io_base+IDE_COMMAND_OFFSET);
+		OUT_BYTE(drive->mult_count ? WIN_MULTREAD : WIN_READ, IDE_COMMAND_REG);
 		return;
 	}
 	if (rq->cmd == WRITE) {
@@ -1493,7 +1553,7 @@ static inline void do_rw_disk (ide_drive_t *drive, struct request *rq, unsigned 
 		if (drive->using_dma && !(HWIF(drive)->dmaproc(ide_dma_write, drive)))
 			return;
 #endif /* CONFIG_BLK_DEV_TRITON */
-		OUT_BYTE(drive->mult_count ? WIN_MULTWRITE : WIN_WRITE, io_base+IDE_COMMAND_OFFSET);
+		OUT_BYTE(drive->mult_count ? WIN_MULTWRITE : WIN_WRITE, IDE_COMMAND_REG);
 		if (ide_wait_stat(drive, DATA_READY, drive->bad_wstat, WAIT_DRQ)) {
 			printk("%s: no DRQ after issuing %s\n", drive->name,
 				drive->mult_count ? "MULTWRITE" : "WRITE");
@@ -1552,7 +1612,7 @@ static inline void do_request (ide_hwif_t *hwif, struct request *rq)
 	unsigned long block, blockend;
 	ide_drive_t *drive;
 
-	sti();
+	STI();
 #ifdef DEBUG
 	printk("%s: do_request: current=0x%08lx\n", hwif->name, (unsigned long) rq);
 #endif
@@ -1659,6 +1719,101 @@ kill_rq:
  * this problem (most don't), the unmask flag can be set using the "hdparm"
  * utility, to permit other interrupts during data/cmd transfers.
  */
+
+#if defined(CONFIG_ATARI)
+
+static void ide_intr (int, void *, struct  pt_regs *);
+
+/* for the new style (fairness) locking ... more sophisticated */
+/* The fairness-style locking code has been adapted from atari_scsi.c
+** (original implementation by Roman Hodek) ... bugs in the ide implementation 
+** are solely my fault :-)
+*/
+
+static int ide_got_lock = 0;
+static struct wait_queue	*ide_fairness_wait = NULL;
+#if 0
+static int ide_trying_lock = 0;
+static struct wait_queue	*ide_try_wait = NULL;
+#endif
+
+/* This function releases the lock on the DMA chip if there is no
+ * currently executing command (as recognized by hwgroup->handler). On
+ * releasing, instances of ide_get_lock are awoken, that put
+ * themselves to sleep for fairness. They can now try to get the lock
+ * again (but others waiting longer more probably will win).
+ */
+
+static void
+ide_release_lock_if_possible( ide_hwgroup_t *hwgroup )
+{
+	unsigned long oldflags;
+
+	save_flags(oldflags);
+	cli();
+
+	if (ide_got_lock && !hwgroup->handler) {
+		ide_got_lock = 0;
+		stdma_release();
+		wake_up( &ide_fairness_wait );
+	}
+
+	restore_flags(oldflags);
+}
+
+/* This function manages the locking of the ST-DMA.
+ * If the DMA isn't locked already for IDE, it trys to lock it by
+ * calling stdma_lock(). But if the DMA is locked by the IDE code and
+ * there are other drivers waiting for the chip, we do not issue the
+ * command immediately but wait on 'ide_fairness_queue'. We will be
+ * waked up when the DMA is unlocked by some IDE interrupt. After that
+ * we try to get the lock again.
+ * But we must be prepared that more than one instance of
+ * ide_get_lock() is waiting on the fairness queue. They should not
+ * try all at once to call stdma_lock(), one is enough! For that, the
+ * first one sets 'ide_trying_lock', others that see that variable
+ * set wait on the queue 'ide_try_wait'.
+ * Complicated, complicated.... Sigh...
+ */
+
+static void ide_get_lock( ide_hwgroup_t *hwgroup )
+{
+	unsigned long oldflags;
+
+	save_flags(oldflags);
+	cli();
+
+	while( intr_count == 0 && ide_got_lock && stdma_others_waiting() )
+		sleep_on( &ide_fairness_wait );
+
+	while (!ide_got_lock) {
+		if (intr_count > 0)
+			panic( "Falcon IDE hasn't ST-DMA lock in interrupt" );
+#if 0
+		if (!ide_trying_lock) {
+			ide_trying_lock = 1;
+			/* This will possibly sleep ... */
+			stdma_lock(ide_intr, hwgroup);
+			ide_got_lock = 1;
+			ide_trying_lock = 0;
+			wake_up( &ide_try_wait );
+		}
+		else {
+			sleep_on( &ide_try_wait );
+		}
+#else
+		/* This will possibly sleep ... */
+		stdma_lock(ide_intr, hwgroup);
+		ide_got_lock = 1;
+#endif
+	}
+
+	restore_flags(oldflags);
+	if (!ide_got_lock)
+		panic("Falcon IDE: someone stole the lock :-(\n");
+}
+#endif /* CONFIG_ATARI */
+
 void ide_do_request (ide_hwgroup_t *hwgroup)
 {
 	cli();	/* paranoia */
@@ -1683,6 +1838,16 @@ void ide_do_request (ide_hwgroup_t *hwgroup)
 				if (rq != NULL && rq->rq_status != RQ_INACTIVE)
 					goto got_rq;
 			} while ((hwif = hwif->next) != hwgroup->next_hwif);
+#if defined(CONFIG_ATARI)
+			/* MSch: On the Atari, we are about to leave, with all 
+			 * requests finished and nothing else to do at this
+			 * place.
+			 * So we must give up the DMA lock here, for use by the 
+			 * SCSI/ACSI/floppy driver.
+			 */
+			if (MACH_IS_ATARI)
+				ide_release_lock_if_possible(hwgroup);
+#endif /* CONFIG_ATARI */
 			hwgroup->active = 0;
 			return;		/* no work left for this hwgroup */
 		}
@@ -1708,6 +1873,21 @@ static void do_hwgroup_request (ide_hwgroup_t *hwgroup)
 	if (hwgroup->handler == NULL) {
 		ide_hwif_t *hgif = hwgroup->hwif;
 		ide_hwif_t *hwif = hgif;
+
+#if defined(CONFIG_ATARI)
+/* MSch: On the Atari, this is the place to lock the ST-DMA, since
+ * do_hwgroup_request() is only called by ll_rw_blk.c, thus in the
+ * context of a process and not from an interrupt. This condition is
+ * necessary, because stdma_lock() sleeps if somebody else already
+ * owns the lock. And the next inner function, do_ide_request(), can
+ * also be called from an int handler (that may never sleep).
+ * Note also that the locking must be done before disable_irq(), else
+ * we would prevent ST-DMA ints being delivered, even in case somebody
+ * else currently owns the lock.
+ */
+		if (MACH_IS_ATARI)
+			ide_get_lock(hwgroup);
+#endif /* CONFIG_ATARI */
 		hwgroup->active = 1;
 		do {
 			disable_irq(hwif->irq);
@@ -1759,7 +1939,7 @@ static void timer_expiry (unsigned long data)
 		hwgroup->handler = NULL;
 		handler(drive);
 	} else if (hwgroup->handler == NULL) {	 /* not waiting for anything? */
-		sti(); /* drive must have responded just as the timer expired */
+		STI(); /* drive must have responded just as the timer expired */
 		printk("%s: marginal timeout\n", drive->name);
 	} else {
 		hwgroup->handler = NULL;	/* abort the operation */
@@ -1837,6 +2017,20 @@ void ide_intr (int irq, void *dev_id, struct pt_regs *regs)
 	ide_hwgroup_t *hwgroup = dev_id;
 	ide_handler_t *handler;
 
+#ifdef CONFIG_AMIGA
+	if (MACH_IS_AMIGA) {
+		unsigned char ch;
+		ide_drive_t *drive = hwgroup->drive;
+		ch = inb(IDE_IRQ_REG);
+		if (!(ch & 0x80))
+			return;
+		if (AMIGAHW_PRESENT(A1200_IDE)) {
+			(void) GET_STAT();
+			outb(0x7c | (ch & 0x03), IDE_IRQ_REG);
+		}
+	}
+#endif /* CONFIG_AMIGA */
+
 	if (irq == hwgroup->hwif->irq && (handler = hwgroup->handler) != NULL) {
 		ide_drive_t *drive = hwgroup->drive;
 		hwgroup->handler = NULL;
@@ -1847,7 +2041,7 @@ void ide_intr (int irq, void *dev_id, struct pt_regs *regs)
 		cli();	/* this is necessary, as next rq may be different irq */
 		if (hwgroup->handler == NULL) {
 			SET_RECOVERY_TIMER(HWIF(drive));
- 			ide_do_request(hwgroup);
+			ide_do_request(hwgroup);
 		}
 	} else {
 		unexpected_intr(irq, hwgroup);
@@ -2406,7 +2600,11 @@ static inline void do_identify (ide_drive_t *drive, byte cmd)
 
 	id = drive->id = kmalloc (SECTOR_WORDS*4, GFP_KERNEL);
 	ide_input_data(drive, id, SECTOR_WORDS);/* read 512 bytes of id info */
-	sti();
+#if defined(CONFIG_AMIGA)
+	if (MACH_IS_AMIGA)
+		big_endianize_driveid(id);
+#endif /* CONFIG_AMIGA */
+	STI();
 
 #if defined (CONFIG_SCSI_EATA_DMA) || defined (CONFIG_SCSI_EATA_PIO) || defined (CONFIG_SCSI_EATA)
 	/*
@@ -2425,12 +2623,16 @@ static inline void do_identify (ide_drive_t *drive, byte cmd)
 	 *  WIN_IDENTIFY returns little-endian info,
 	 *  WIN_PIDENTIFY *usually* returns little-endian info.
 	 */
+#ifdef __BIG_ENDIAN
+	bswap = 0;
+#else
 	bswap = 1;
+#endif
 	if (cmd == WIN_PIDENTIFY) {
 		if ((id->model[0] == 'N' && id->model[1] == 'E') /* NEC */
 		 || (id->model[0] == 'F' && id->model[1] == 'X') /* Mitsumi */
 		 || (id->model[0] == 'P' && id->model[1] == 'i'))/* Pioneer */
-			bswap = 0;	/* Vertos drives may still be weird */
+			bswap ^= 1;	/* Vertos drives may still be weird */
 	}
 	ide_fixstring (id->model,     sizeof(id->model),     bswap);
 	ide_fixstring (id->fw_rev,    sizeof(id->fw_rev),    bswap);
@@ -2638,8 +2840,9 @@ static void delay_50ms (void)
  */
 static int try_to_identify (ide_drive_t *drive, byte cmd)
 {
-	int hd_status, rc;
+	int rc;
 	unsigned long timeout;
+	ide_ioreg_t hd_status;
 	unsigned long irqs_on = 0;
 	int irq_off;
 
@@ -2898,6 +3101,32 @@ static void probe_cmos_for_drives (ide_hwif_t *hwif)
 #endif
 }
 
+#ifdef __mc68000__
+/*
+ * Some weird drives (Maxtor, Western Digital) lock up after identification
+ */
+static int post_ident_reset = 0;
+
+static const char *pir_blacklist[] = {
+    /* For partial string compare */
+    "Maxtor 7540 AV",	/* Thorsten Floeck <floeck@wctc6.chemie.uni-wuppertal.de> */
+    "WDC AC2340H",	/* Lars Balker Rasmussen <gnort@daimi.aau.dk> */
+    "WDC AC2850F",	/* Joerg Dorchain <dorchain@mpi-sb.mpg.de> */
+    NULL
+};
+
+static int scan_pir_blacklist(const char *model)
+{
+    const char **p;
+
+    for (p = pir_blacklist; *p; p++) {
+	if (!strncmp(*p, model, strlen(*p)))
+	    return(1);
+    }
+    return(0);
+}
+#endif /* __mc68000__ */
+
 /*
  * This routine only knows how to look for drive units 0 and 1
  * on an interface, so any setting of MAX_DRIVES > 2 won't work here.
@@ -2910,6 +3139,7 @@ static void probe_hwif (ide_hwif_t *hwif)
 		return;
 	if (hwif->io_base == HD_DATA)
 		probe_cmos_for_drives (hwif);
+#ifdef IDE_IO_PORT_IO
 #if CONFIG_BLK_DEV_PROMISE
 	if (!hwif->is_promise2 &&
 	   (check_region(hwif->io_base,8) || check_region(hwif->ctl_port,1))) {
@@ -2927,11 +3157,13 @@ static void probe_hwif (ide_hwif_t *hwif)
 		}
 		if (!msgout)
 			printk("%s: ports already in use, skipping probe\n", hwif->name);
-	} else {
+	} else
+#endif /* IDE_IO_PORT_IO */
+	{
 		unsigned long flags;
 		save_flags(flags);
 
-		sti();	/* needed for jiffies and irq probing */
+		STI();	/* needed for jiffies and irq probing */
 		/*
 		 * Second drive should only exist if first drive was found,
 		 * but a lot of cdrom drives are configured as single slaves.
@@ -2945,11 +3177,23 @@ static void probe_hwif (ide_hwif_t *hwif)
 					 drive->name, drive->head);
 					drive->present = 0;
 				}
+#ifdef __mc68000__
+				/* Is this a weird drive that locks up after
+				   identification? */
+				if (scan_pir_blacklist(drive->id->model)) {
+				    printk("%s: This drive is on our post "
+					   "identification reset blacklist.\n",
+					   drive->name);
+				    post_ident_reset = 1;
+				}
+#endif /* __mc68000__ */
 			}
 			if (drive->present && !hwif->present) {
 				hwif->present = 1;
+#ifdef IDE_IO_PORT_IO
 				request_region(hwif->io_base,  8, hwif->name);
 				request_region(hwif->ctl_port, 1, hwif->name);
+#endif
 			}
 		}
 		restore_flags(flags);
@@ -3276,8 +3520,8 @@ void ide_setup (char *s)
 			case 2: /* base,ctl */
 				vals[2] = 0;	/* default irq = probe for it */
 			case 3: /* base,ctl,irq */
-				hwif->io_base  = vals[0];
-				hwif->ctl_port = vals[1];
+				hwif->io_base  = (ide_ioreg_t) vals[0];
+				hwif->ctl_port = (ide_ioreg_t) vals[1];
 				hwif->irq      = vals[2];
 				hwif->noprobe  = 0;
 				hwif->chipset  = ide_generic;
@@ -3466,6 +3710,29 @@ static int init_irq (ide_hwif_t *hwif)
 		hwgroup->timer.data = (unsigned long) hwgroup;
 	}
 
+#ifdef __mc68000__
+#ifdef CONFIG_AMIGA
+	if (MACH_IS_AMIGA){
+		/* Interrupt was disabled for probing */
+		enable_irq(hwif->irq);
+		if (request_irq(hwif->irq, ide_intr, 0, hwif->name, hwgroup)) {
+			restore_flags(flags);
+			return 1;
+		}
+	}
+#endif /* CONFIG_AMIGA */
+#ifdef CONFIG_ATARI
+	if (MACH_IS_ATARI){
+		/* Interrupt was disabled for probing */
+		enable_irq(hwif->irq);
+		/* Locking the ST-DMA was required to muck with interrupts */
+		ide_release_lock_if_possible(hwgroup);
+#ifdef DEBUG
+		printk("Atari IDE: released and unlocked interrupt!\n");
+#endif
+	}
+#endif /* CONFIG_ATARI */
+#else /* !__mc68000__ */
 	/*
 	 * Allocate the irq, if not already obtained for another hwif
 	 */
@@ -3477,6 +3744,7 @@ static int init_irq (ide_hwif_t *hwif)
 			return 1;
 		}
 	}
+#endif /* !__mc68000__ */
 
 	/*
 	 * Everything is okay, so link us into the hwgroup
@@ -3487,10 +3755,12 @@ static int init_irq (ide_hwif_t *hwif)
 
 	restore_flags(flags);	/* safe now that hwif->hwgroup is set up */
 
+#ifdef IDE_IO_PORT_IO
 	printk("%s at 0x%03x-0x%03x,0x%03x on irq %d", hwif->name,
 		hwif->io_base, hwif->io_base+7, hwif->ctl_port, hwif->irq);
 	if (match)
 		printk(" (%sed with %s)", hwif->sharing_irq ? "shar" : "serializ", match->name);
+#endif
 	printk("\n");
 	return 0;
 }
@@ -3574,6 +3844,182 @@ static void ide_probe_promise_20246(void)
 
 #endif /* CONFIG_PCI */
 
+#ifdef CONFIG_AMIGA
+/* #define AMIGA_BUDDHA_DEBUG */
+static void ide_probe_amiga (void)
+{
+	ide_hwif_t *hwif = &ide_hwifs[0];
+	int i, key; 
+	const struct ConfigDev *cd;
+	static u_long buddha_board = 0;
+	static int buddha_num_hwifs = 0;
+	static int amiga_num_hwifs = 0;
+#include "buddha.h"
+
+	if (!MACH_IS_AMIGA)
+		return;
+
+/* Test if an A4000 or an A1200 and setup the base of hd_regs acordingly */
+	hwif->irq = IRQ_AMIGA_PORTS;
+
+	if (AMIGAHW_PRESENT(A4000_IDE)) {
+		hwif->io_base = (unsigned char *)ZTWO_VADDR(HD_BASE_A4000);
+		hwif->hd_regs.hd_irq = (unsigned char *)ZTWO_VADDR(HD_A4000_IRQ);
+		amiga_num_hwifs++;
+		printk("Gayle IDE interface (A4000 style)\n");
+	} else if (AMIGAHW_PRESENT(A1200_IDE)) {
+		hwif->io_base = (unsigned char *)ZTWO_VADDR(HD_BASE_A1200);
+		hwif->hd_regs.hd_irq = (unsigned char *)ZTWO_VADDR(HD_A1200_IRQ);
+		amiga_num_hwifs++;
+		printk("Gayle IDE interface (A1200 style)\n");
+	}
+	if (amiga_num_hwifs > 0) { /* we can have max one gayle interface */
+		/* Now set the hd_regs struct */
+		hwif->hd_regs.hd_error   = hwif->io_base + AMI_HD_ERROR;
+		hwif->hd_regs.hd_nsector = hwif->io_base + AMI_HD_NSECTOR;
+		hwif->hd_regs.hd_sector  = hwif->io_base + AMI_HD_SECTOR;
+		hwif->hd_regs.hd_lcyl    = hwif->io_base + AMI_HD_LCYL;
+		hwif->hd_regs.hd_hcyl    = hwif->io_base + AMI_HD_HCYL;
+		hwif->hd_regs.hd_select  = hwif->io_base + AMI_HD_SELECT;
+		hwif->hd_regs.hd_status  = hwif->io_base + AMI_HD_STATUS;
+		hwif->ctl_port           = hwif->io_base + AMI_HD_CMD;
+
+		/* Disable interrupt for probing */
+		disable_irq(hwif->irq);
+
+		hwif++; /* next interface, please */		
+
+		if ( (amiga_num_hwifs + 1) > MAX_HWIFS) { 
+		/* MAX_HWIFS must be >1 for use with buddha/catweasel */
+#ifdef AMIGA_BUDDHA_DEBUG
+			printk("WARNING: this kernel can handle only %d IDE interfaces!\n", MAX_HWIFS);
+			printk(" Edit include/asm-m68k/ide.h if you want to use more.\n");
+#endif
+			return;
+		}
+	} /* Maybe we have a Buddha or Catweasel controller? */
+	if ((key = zorro_find(MANUF_INDIVIDUAL_COMP, PROD_BUDDHA, 0, 0))) {
+		buddha_num_hwifs = BUDDHA_NUM_HWIFS;
+		printk("Buddha IDE interface\n");
+	} else if ((key = zorro_find(MANUF_INDIVIDUAL_COMP, PROD_CATWEASEL, 0, 0))) {
+		buddha_num_hwifs = CATWEASEL_NUM_HWIFS;
+		printk("Catweasel IDE interface\n");
+	}
+	if ( (amiga_num_hwifs + buddha_num_hwifs) > MAX_HWIFS) { 
+	/* check if MAX_HWIFS is large enough for gayle and buddha/catweasel */
+#ifdef AMIGA_BUDDHA_DEBUG
+		printk("WARNING: this kernel can handle only %d IDE interfaces,\n", MAX_HWIFS);
+		printk(" this machine seems to have %d!\n", (amiga_num_hwifs + buddha_num_hwifs) );
+		printk(" Edit include/asm-m68k/ide.h if you want to use them all (now using only %d).\n", amiga_num_hwifs);
+#endif
+		return;
+	} /* this is very paranoid, too paranoid? */
+	if (key) {
+		cd = zorro_get_board(key);
+		buddha_board = (u_long)cd->cd_BoardAddr;
+		if (buddha_board) {
+			buddha_board = ZTWO_VADDR(buddha_board);
+			/* write to BUDDHA_IRQ_MR to enable the board IRQ */
+			*(char *)(buddha_board+BUDDHA_IRQ_MR) = 0;
+			zorro_config_board(key, 0);
+		} else { /* can this happen ? */
+			buddha_num_hwifs = 0;
+		}
+	} else { /* no buddha or catweasel present */
+		buddha_num_hwifs = 0;
+	} 
+	
+	if (buddha_num_hwifs > 0) { 
+	/* we have two or three more interfaces, now setup ide_hwifs  */
+		for (i = 1; i <= buddha_num_hwifs; i++) {	
+			switch (i) {
+			case 1:
+				hwif->io_base = (unsigned char *)(buddha_board + BUDDHA_BASE1); 
+				hwif->hd_regs.hd_irq = (unsigned char *)(buddha_board + BUDDHA_IRQ1);
+				break;
+			case 2:
+				hwif->io_base = (unsigned char *)(buddha_board + BUDDHA_BASE2); 
+				hwif->hd_regs.hd_irq = (unsigned char *)(buddha_board + BUDDHA_IRQ2);
+				break;
+			case 3:
+				hwif->io_base = (unsigned char *)(buddha_board + BUDDHA_BASE3); 
+				hwif->hd_regs.hd_irq = (unsigned char *)(buddha_board + BUDDHA_IRQ3);
+				break;
+			default:
+				return; /* this can not happen */
+			}
+			hwif->hd_regs.hd_error   = hwif->io_base + BUDDHA_ERROR;
+			hwif->hd_regs.hd_nsector = hwif->io_base + BUDDHA_NSECTOR;
+			hwif->hd_regs.hd_sector  = hwif->io_base + BUDDHA_SECTOR;
+			hwif->hd_regs.hd_lcyl    = hwif->io_base + BUDDHA_LCYL;
+			hwif->hd_regs.hd_hcyl    = hwif->io_base + BUDDHA_HCYL;
+			hwif->hd_regs.hd_select  = hwif->io_base + BUDDHA_SELECT;
+			hwif->hd_regs.hd_status  = hwif->io_base + BUDDHA_STATUS;
+			hwif->ctl_port           = hwif->io_base + BUDDHA_CONTROL;
+
+			/* Disable interrupt for probing */
+			disable_irq(hwif->irq);
+
+			hwif++; /* next interface, please */
+		}
+	}
+	if ( ( amiga_num_hwifs + buddha_num_hwifs ) < MAX_HWIFS ) {
+	/* the kernel could cope with more interfaces, now set the remaining to noprobe */ 
+		int i;
+		
+		for (i = (amiga_num_hwifs + buddha_num_hwifs); i < MAX_HWIFS; i++) {
+			hwif->noprobe = 1;
+			hwif++; /* next interface, please */			
+		}
+	}
+}
+#endif /* CONFIG_AMIGA */
+
+#ifdef CONFIG_ATARI
+static void ide_probe_atari (void)
+{
+	ide_hwif_t *hwif = &ide_hwifs[0];
+
+	if (!MACH_IS_ATARI)
+		return;
+
+	if (!ATARIHW_PRESENT(IDE)) {
+		hwif->noprobe = 1;
+		return;
+	}
+	printk("Falcon IDE interface\n");
+	hwif->irq = IRQ_MFP_IDE;
+	hwif->io_base = (unsigned char *)ATA_HD_BASE;
+
+	/* Now set the hd_regs struct */
+	hwif->hd_regs.hd_error     = hwif->io_base + ATA_HD_ERROR;
+	hwif->hd_regs.hd_nsector   = hwif->io_base + ATA_HD_NSECTOR;
+	hwif->hd_regs.hd_sector    = hwif->io_base + ATA_HD_SECTOR;
+	hwif->hd_regs.hd_lcyl      = hwif->io_base + ATA_HD_LCYL;
+	hwif->hd_regs.hd_hcyl      = hwif->io_base + ATA_HD_HCYL;
+	hwif->hd_regs.hd_select    = hwif->io_base + ATA_HD_CURRENT;
+	hwif->hd_regs.hd_status    = hwif->io_base + ATA_HD_STATUS;
+	hwif->ctl_port             = hwif->io_base + ATA_HD_CMD;
+
+	/* Check if IDE has locked the ST-DMA (and thus the interrupt) */
+	if (ide_got_lock) {
+	        /* Disable interrupt for probing */
+#ifdef DEBUG
+		printk("Atari IDE: got interrupt, disabling for probe!\n");
+#endif
+		disable_irq(hwif->irq);
+	} else {
+	        /* lock ST-DMA and disable interrupt for probing */
+#ifdef DEBUG
+		printk("Atari IDE: lock and disable interrupt for probe!\n");
+#endif
+		ide_get_lock(hwif->hwgroup);
+		disable_irq(hwif->irq);
+	}
+
+}
+#endif /* CONFIG_ATARI */
+
 /*
  * ide_init_pci() finds/initializes "known" PCI IDE interfaces
  *
@@ -3615,6 +4061,12 @@ static void probe_for_hwifs (void)
 #ifdef CONFIG_BLK_DEV_PROMISE
 	init_dc4030();
 #endif
+#ifdef CONFIG_AMIGA
+	ide_probe_amiga();
+#endif
+#ifdef CONFIG_ATARI
+	ide_probe_atari();
+#endif
 }
 
 static int hwif_init (int h)
@@ -3622,8 +4074,16 @@ static int hwif_init (int h)
 	ide_hwif_t *hwif = &ide_hwifs[h];
 	void (*rfn)(void);
 	
-	if (!hwif->present)
+	if (!hwif->present){
+#if defined(CONFIG_AMIGA) || defined (CONFIG_ATARI)
+		/*
+		 * irq was disabled for probing. We gotta re-enable it
+		 * here when no IDE drives were found.
+		 */
+		enable_irq(hwif->irq);
+#endif
 		return 0;
+	}
 	if (!hwif->irq) {
 		if (!(hwif->irq = default_irqs[h])) {
 			printk("%s: DISABLED, NO IRQ\n", hwif->name);
@@ -3664,6 +4124,13 @@ static int hwif_init (int h)
 		read_ahead[hwif->major] = 8;	/* (4kB) */
 		hwif->present = 1;	/* success */
 	}
+#ifdef __mc68000__
+	if (post_ident_reset) {
+	    printk("ide: Doing a post identification reset...\n");
+	    outb(12,hwif->ctl_port);
+	    outb(8,hwif->ctl_port);
+	}
+#endif /* __mc68000__ */
 	return hwif->present;
 }
 
@@ -3766,6 +4233,7 @@ void ide_unregister (unsigned int index)
 	if (irq_count == 1)
 		free_irq(hwif->irq, hwgroup);
 
+#ifdef IDE_IO_PORT_IO
 	/*
 	 * Note that we only release the standard ports,
 	 * and do not even try to handle any extra ports
@@ -3773,7 +4241,7 @@ void ide_unregister (unsigned int index)
 	 */
 	release_region(hwif->io_base, 8);
 	release_region(hwif->ctl_port, 1);
-
+#endif
 	/*
 	 * Remove us from the hwgroup, and free
 	 * the hwgroup if we were the only member

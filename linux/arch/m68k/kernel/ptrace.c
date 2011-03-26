@@ -198,6 +198,7 @@ repeat:
 /* this is a hack for non-kernel-mapped video buffers and similar */
 	if (page < high_memory) {
 		*(unsigned long *) (page + (addr & ~PAGE_MASK)) = data;
+		flush_page_to_ram (page);
 	}
 /* we're bypassing pagetables, so we have to set the dirty bit ourselves */
 /* this should also re-instate whatever read-only mode there was before */
@@ -210,7 +211,7 @@ static struct vm_area_struct * find_extend_vma(struct task_struct * tsk, unsigne
 	struct vm_area_struct * vma;
 
 	addr &= PAGE_MASK;
-	vma = find_vma(tsk,addr);
+	vma = find_vma(tsk->mm, addr);
 	if (!vma)
 		return NULL;
 	if (vma->vm_start <= addr)
@@ -522,7 +523,7 @@ asmlinkage void syscall_trace(void)
 		return;
 	current->exit_code = SIGTRAP;
 	current->state = TASK_STOPPED;
-	notify_parent(current);
+	notify_parent(current, SIGCHLD);
 	schedule();
 	/*
 	 * this isn't the same as continuing with a signal, but it will do

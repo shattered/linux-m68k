@@ -96,6 +96,7 @@ void unplug_device(void * data)
 		dev->current_request = next;
 		if (next) {
 			dev->plug.next = NULL;
+			restore_flags(flags); /* XXX */
 			(dev->request_fn)();
 		}
 	}
@@ -260,8 +261,8 @@ void add_request(struct blk_dev_struct * dev, struct request * req)
 		mark_buffer_clean(req->bh);
 	if (!(tmp = dev->current_request)) {
 		dev->current_request = req;
+		sti(); /* XXX */
 		(dev->request_fn)();
-		sti();
 		return;
 	}
 	for ( ; tmp->next ; tmp = tmp->next) {
@@ -273,11 +274,11 @@ void add_request(struct blk_dev_struct * dev, struct request * req)
 	req->next = tmp->next;
 	tmp->next = req;
 
+	sti(); /* XXX */
 /* for SCSI devices, call request_fn unconditionally */
 	if (scsi_blk_major(MAJOR(req->rq_dev)))
 		(dev->request_fn)();
 
-	sti();
 }
 
 #define MAX_SECTORS 244
@@ -402,6 +403,7 @@ void make_request(int major,int rw, struct buffer_head * bh)
 	     case FLOPPY_MAJOR:
 	     case IDE2_MAJOR:
 	     case IDE3_MAJOR:
+	     case ACSI_MAJOR:
 		/*
 		 * The scsi disk and cdrom drivers completely remove the request
 		 * from the queue when they start processing an entry.  For this
@@ -670,6 +672,9 @@ int blk_dev_init(void)
 		req->next = NULL;
 	}
 	memset(ro_bits,0,sizeof(ro_bits));
+#ifdef CONFIG_AMIGA_Z2RAM
+	z2_init();
+#endif
 #ifdef CONFIG_BLK_DEV_RAM
 	rd_init();
 #endif
@@ -694,11 +699,16 @@ int blk_dev_init(void)
 #ifdef CONFIG_BLK_DEV_FD
 	floppy_init();
 #else
+#if !defined (__mc68000__)
 	outb_p(0xc, 0x3f2);
+#endif
 #endif
 #ifdef CONFIG_CDU31A
 	cdu31a_init();
 #endif CONFIG_CDU31A
+#ifdef CONFIG_ATARI_ACSI
+	acsi_init();
+#endif CONFIG_ATARI_ACSI
 #ifdef CONFIG_MCD
 	mcd_init();
 #endif CONFIG_MCD

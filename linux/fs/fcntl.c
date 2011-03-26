@@ -62,7 +62,7 @@ asmlinkage long sys_fcntl(unsigned int fd, unsigned int cmd, unsigned long arg)
 		case F_DUPFD:
 			return dupfd(fd,arg);
 		case F_GETFD:
-			return FD_ISSET(fd, &current->files->close_on_exec);
+			return FD_ISSET(fd, &current->files->close_on_exec) != 0;
 		case F_SETFD:
 			if (arg&1)
 				FD_SET(fd, &current->files->close_on_exec);

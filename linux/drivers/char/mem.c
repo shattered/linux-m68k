@@ -33,6 +33,13 @@ void isdn_init(void);
 void pcwatchdog_init(void);
 #endif
 
+#if defined(__mc68000__)
+extern void fbmem_init( void );
+#endif
+#if defined(CONFIG_AMIGA_GSP)
+extern void gsp_init(void);
+#endif
+
 static int read_ram(struct inode * inode, struct file * file, char * buf, int count)
 {
 	return -EIO;
@@ -56,7 +63,8 @@ static int read_mem(struct inode * inode, struct file * file, char * buf, int co
 	if (count > high_memory - p)
 		count = high_memory - p;
 	read = 0;
-#if defined(__i386__) || defined(__sparc__) /* we don't have page 0 mapped on x86/sparc.. */
+#if defined(__i386__) || defined(__sparc__) || defined(__mc68000__)
+	/* we don't have page 0 mapped on x86, sparc and m68k.. */
 	while (p < PAGE_OFFSET + PAGE_SIZE && count > 0) {
 		put_user(0,buf);
 		buf++;
@@ -84,7 +92,8 @@ static int write_mem(struct inode * inode, struct file * file, const char * buf,
 	if (count > high_memory - p)
 		count = high_memory - p;
 	written = 0;
-#if defined(__i386__) || defined(__sparc__) /* we don't have page 0 mapped on x86/sparc.. */
+#if defined(__i386__) || defined(__sparc__) || defined(__mc68000__)
+	/* we don't have page 0 mapped on x86, sparc and m68k.. */
 	while (PAGE_OFFSET + p < PAGE_SIZE && count > 0) {
 		/* Hmm. Do something? */
 		buf++;
@@ -136,6 +145,9 @@ static int read_kmem(struct inode *inode, struct file *file, char *buf, int coun
 
 static int read_port(struct inode * inode, struct file * file,char * buf, int count)
 {
+#if defined(__mc68000__)
+  return -EIO;
+#else
 	unsigned int i = file->f_pos;
 	char * tmp = buf;
 
@@ -146,10 +158,14 @@ static int read_port(struct inode * inode, struct file * file,char * buf, int co
 	}
 	file->f_pos = i;
 	return tmp-buf;
+#endif
 }
 
 static int write_port(struct inode * inode, struct file * file, const char * buf, int count)
 {
+#if defined(__mc68000__)
+  return -EIO;
+#else
 	unsigned int i = file->f_pos;
 	const char * tmp = buf;
 
@@ -160,6 +176,7 @@ static int write_port(struct inode * inode, struct file * file, const char * buf
 	}
 	file->f_pos = i;
 	return tmp-buf;
+#endif
 }
 
 static int read_null(struct inode * node, struct file * file, char * buf, int count)
@@ -393,6 +410,12 @@ int chr_dev_init(void)
 	if (register_chrdev(MEM_MAJOR,"mem",&memory_fops))
 		printk("unable to get major %d for memory devs\n", MEM_MAJOR);
 	rand_initialize();
+#if defined (__mc68000__)
+	fbmem_init();
+#endif
+#if defined (CONFIG_AMIGA_GSP)
+	gsp_init();
+#endif
 	tty_init();
 #ifdef CONFIG_PRINTER
 	lp_init();
@@ -400,11 +423,12 @@ int chr_dev_init(void)
 #if defined (CONFIG_BUSMOUSE) || defined(CONFIG_UMISC) || \
     defined (CONFIG_PSMOUSE) || defined (CONFIG_MS_BUSMOUSE) || \
     defined (CONFIG_ATIXL_BUSMOUSE) || defined(CONFIG_SOFT_WATCHDOG) || \
+    defined (CONFIG_AMIGAMOUSE) || defined (CONFIG_ATARIMOUSE) || \
     defined (CONFIG_PCWATCHDOG) || defined (CONFIG_H8) || defined(CONFIG_WDT) || \
     defined (CONFIG_APM) || defined (CONFIG_RTC) || defined (CONFIG_SUN_MOUSE)
 	misc_init();
 #endif
-#ifdef CONFIG_SOUND
+#if defined (CONFIG_SOUND)
 	soundcard_init();
 #endif
 #if CONFIG_QIC02_TAPE

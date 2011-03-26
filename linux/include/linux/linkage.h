@@ -26,6 +26,15 @@
 #endif
 #endif
 
+#ifdef __mc68000__
+#ifdef __ELF__
+#define __ALIGN .align 4
+#define __ALIGN_STR ".align 4"
+#else
+#define __ALIGN .align 2
+#define __ALIGN_STR ".align 2"
+#endif
+#else /* !m68k */
 #if !defined(__i486__) && !defined(__i586__)
 #ifdef __ELF__
 #define __ALIGN .align 4,0x90
@@ -43,11 +52,13 @@
 #define __ALIGN_STR ".align 4,0x90"
 #endif /* __ELF__ */
 #endif /* __i486__/__i586__ */
+#endif
+
+#define ALIGN_STR __ALIGN_STR
 
 #ifdef __ASSEMBLY__
 
 #define ALIGN __ALIGN
-#define ALIGN_STRING __ALIGN_STRING
 
 #define ENTRY(name) \
   .globl SYMBOL_NAME(name); \

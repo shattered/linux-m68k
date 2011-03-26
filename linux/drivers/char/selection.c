@@ -119,6 +119,12 @@ int set_selection(const unsigned long arg, struct tty_struct *tty, int user)
 
 	do_unblank_screen();
 
+#if defined(__mc68000__)
+	video_num_lines = get_video_num_lines(fg_console);
+	video_num_columns = get_video_num_columns(fg_console);
+	video_size_row = get_video_size_row(fg_console);
+#endif
+
 	{ unsigned short *args, xs, ys, xe, ye;
 
 	  args = (unsigned short *)(arg + 1);

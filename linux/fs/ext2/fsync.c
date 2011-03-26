@@ -27,15 +27,15 @@
 #define blocksize (EXT2_BLOCK_SIZE(inode->i_sb))
 #define addr_per_block (EXT2_ADDR_PER_BLOCK(inode->i_sb))
 
-static int sync_block (struct inode * inode, u32 * block, int wait)
+static int sync_block (struct inode * inode, u32 * block, int wait, int bs)
 {
 	struct buffer_head * bh;
-	int tmp;
+	u32 tmp;
 	
-	if (!*block)
-		return 0;
 	tmp = *block;
-	bh = get_hash_table (inode->i_dev, *block, blocksize);
+	if (!tmp)
+		return 0;
+	bh = get_hash_table (inode->i_dev, e_swab (bs, tmp), blocksize);
 	if (!bh)
 		return 0;
 	if (*block != tmp) {
@@ -56,18 +56,19 @@ static int sync_block (struct inode * inode, u32 * block, int wait)
 }
 
 static int sync_iblock (struct inode * inode, u32 * iblock, 
-			struct buffer_head ** bh, int wait) 
+			struct buffer_head ** bh, int wait, int bs) 
 {
-	int rc, tmp;
+	int rc;
+	u32 tmp;
 	
 	*bh = NULL;
 	tmp = *iblock;
 	if (!tmp)
 		return 0;
-	rc = sync_block (inode, iblock, wait);
+	rc = sync_block (inode, iblock, wait, bs);
 	if (rc)
 		return rc;
-	*bh = bread (inode->i_dev, tmp, blocksize);
+	*bh = bread (inode->i_dev, e_swab (bs, tmp), blocksize);
 	if (tmp != *iblock) {
 		brelse (*bh);
 		*bh = NULL;
@@ -85,7 +86,7 @@ static int sync_direct (struct inode * inode, int wait)
 	int rc, err = 0;
 
 	for (i = 0; i < EXT2_NDIR_BLOCKS; i++) {
-		rc = sync_block (inode, inode->u.ext2_i.i_data + i, wait);
+		rc = sync_block (inode, inode->u.ext2_i.i_data + i, wait, 0);
 		if (rc > 0)
 			break;
 		if (rc)
@@ -94,20 +95,21 @@ static int sync_direct (struct inode * inode, int wait)
 	return err;
 }
 
-static int sync_indirect (struct inode * inode, u32 * iblock, int wait)
+static int sync_indirect (struct inode * inode, u32 * iblock, int wait, int bs1)
 {
 	int i;
 	struct buffer_head * ind_bh;
 	int rc, err = 0;
+	int bs = BYTE_SWAP(inode->i_sb->u.ext2_sb.s_byte_swapped);
 
-	rc = sync_iblock (inode, iblock, &ind_bh, wait);
+	rc = sync_iblock (inode, iblock, &ind_bh, wait, bs1);
 	if (rc || !ind_bh)
 		return rc;
 	
 	for (i = 0; i < addr_per_block; i++) {
 		rc = sync_block (inode, 
 				 ((u32 *) ind_bh->b_data) + i,
-				 wait);
+				 wait, bs);
 		if (rc > 0)
 			break;
 		if (rc)
@@ -117,20 +119,21 @@ static int sync_indirect (struct inode * inode, u32 * iblock, int wait)
 	return err;
 }
 
-static int sync_dindirect (struct inode * inode, u32 * diblock, int wait)
+static int sync_dindirect (struct inode * inode, u32 * diblock, int wait, int bs1)
 {
 	int i;
 	struct buffer_head * dind_bh;
 	int rc, err = 0;
+	int bs = BYTE_SWAP(inode->i_sb->u.ext2_sb.s_byte_swapped);
 
-	rc = sync_iblock (inode, diblock, &dind_bh, wait);
+	rc = sync_iblock (inode, diblock, &dind_bh, wait, bs1);
 	if (rc || !dind_bh)
 		return rc;
 	
 	for (i = 0; i < addr_per_block; i++) {
 		rc = sync_indirect (inode,
 				    ((u32 *) dind_bh->b_data) + i,
-				    wait);
+				    wait, bs);
 		if (rc > 0)
 			break;
 		if (rc)
@@ -140,20 +143,21 @@ static int sync_dindirect (struct inode * inode, u32 * diblock, int wait)
 	return err;
 }
 
-static int sync_tindirect (struct inode * inode, u32 * tiblock, int wait)
+static int sync_tindirect (struct inode * inode, u32 * tiblock, int wait, int bs1)
 {
 	int i;
 	struct buffer_head * tind_bh;
 	int rc, err = 0;
+	int bs = BYTE_SWAP(inode->i_sb->u.ext2_sb.s_byte_swapped);
 
-	rc = sync_iblock (inode, tiblock, &tind_bh, wait);
+	rc = sync_iblock (inode, tiblock, &tind_bh, wait, bs1);
 	if (rc || !tind_bh)
 		return rc;
 	
 	for (i = 0; i < addr_per_block; i++) {
 		rc = sync_dindirect (inode,
 				     ((u32 *) tind_bh->b_data) + i,
-				     wait);
+				     wait, bs);
 		if (rc > 0)
 			break;
 		if (rc)
@@ -178,13 +182,13 @@ int ext2_sync_file (struct inode * inode, struct file * file)
 		err |= sync_direct (inode, wait);
 		err |= sync_indirect (inode,
 				      inode->u.ext2_i.i_data+EXT2_IND_BLOCK,
-				      wait);
+				      wait, 0);
 		err |= sync_dindirect (inode,
 				       inode->u.ext2_i.i_data+EXT2_DIND_BLOCK, 
-				       wait);
+				       wait, 0);
 		err |= sync_tindirect (inode, 
 				       inode->u.ext2_i.i_data+EXT2_TIND_BLOCK, 
-				       wait);
+				       wait, 0);
 	}
 skip:
 	err |= ext2_sync_inode (inode);

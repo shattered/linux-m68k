@@ -29,6 +29,7 @@ static struct vm_struct * vmlist = NULL;
 
 static inline void set_pgdir(unsigned long address, pgd_t entry)
 {
+#ifndef __mc68000__
 	struct task_struct * p;
 
 	for_each_task(p) {
@@ -36,6 +37,7 @@ static inline void set_pgdir(unsigned long address, pgd_t entry)
 			continue;
 		*pgd_offset(p->mm,address) = entry;
 	}
+#endif
 }
 
 static inline void free_area_pte(pmd_t * pmd, unsigned long address, unsigned long size)
@@ -99,7 +101,11 @@ static void free_area_pages(unsigned long address, unsigned long size)
 	pgd_t * dir;
 	unsigned long end = address + size;
 
-	dir = pgd_offset(&init_mm, address);
+#if !defined(__mc68000__)
+ 	dir = pgd_offset(&init_mm, address);
+#else
+	dir = pgd_offset_k(address);
+#endif
 	flush_cache_all();
 	while (address < end) {
 		free_area_pmd(dir, address, end - address);
@@ -156,7 +162,11 @@ static int alloc_area_pages(unsigned long address, unsigned long size)
 	pgd_t * dir;
 	unsigned long end = address + size;
 
-	dir = pgd_offset(&init_mm, address);
+#if !defined(__mc68000__)
+ 	dir = pgd_offset(&init_mm, address);
+#else
+	dir = pgd_offset_k(address);
+#endif
 	flush_cache_all();
 	while (address < end) {
 		pmd_t *pmd = pmd_alloc_kernel(dir, address);
@@ -218,7 +228,11 @@ static int remap_area_pages(unsigned long address, unsigned long offset, unsigne
 	unsigned long end = address + size;
 
 	offset -= address;
-	dir = pgd_offset(&init_mm, address);
+#if !defined(__mc68000__)
+ 	dir = pgd_offset(&init_mm, address);
+#else
+	dir = pgd_offset_k(address);
+#endif
 	flush_cache_all();
 	while (address < end) {
 		pmd_t *pmd = pmd_alloc_kernel(dir, address);
@@ -335,7 +349,10 @@ int vread(char *buf, char *addr, int count)
 		while (addr < vaddr) {
 			if (count == 0)
 				goto finished;
-			put_user('\0', buf++), addr++, count--;
+			put_user('\0', buf);
+			buf++;
+			addr++;
+			count--;
 		}
 		n = tmp->size - PAGE_SIZE;
 		if (addr > vaddr)
@@ -343,7 +360,10 @@ int vread(char *buf, char *addr, int count)
 		while (--n >= 0) {
 			if (count == 0)
 				goto finished;
-			put_user(*addr++, buf++), count--;
+			put_user(*addr, buf);
+			buf++;
+			addr++;
+			count--;
 		}
 	}
 finished:

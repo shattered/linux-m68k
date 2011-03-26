@@ -591,6 +591,15 @@ else
   endif
 endif
 
+ifeq ($(CONFIG_ARIADNE2),y)
+L_OBJS += ariadne2.o
+CONFIG_8390_BUILTIN = y
+else
+  ifeq ($(CONFIG_ARIADNE2),m)
+  CONFIG_8390_MODULE = y
+  M_OBJS += ariadne2.o
+  endif
+endif
 
 # If anything built-in uses the 8390, then build it into the kernel also.
 # If not, but a module uses it, build as a module.
@@ -619,11 +628,35 @@ else
   endif
 endif
 
+ifeq ($(CONFIG_ATARI_BIONET),y)
+L_OBJS += atari_bionet.o
+else
+  ifeq ($(CONFIG_ATARI_BIONET),m)
+  M_OBJS += atari_bionet.o
+  endif
+endif
+
+ifeq ($(CONFIG_ATARI_PAMSNET),y)
+L_OBJS += atari_pamsnet.o
+else
+  ifeq ($(CONFIG_ATARI_PAMSNET),m)
+  M_OBJS += atari_pamsnet.o
+  endif
+endif
+
 ifeq ($(CONFIG_A2065),y)
 L_OBJS += a2065.o
 else
   ifeq ($(CONFIG_A2065),m)
   M_OBJS += a2065.o
+  endif
+endif
+
+ifeq ($(CONFIG_APNE),y)
+L_OBJS += apne.o
+else
+  ifeq ($(CONFIG_APNE),m)
+  M_OBJS += apne.o
   endif
 endif
 

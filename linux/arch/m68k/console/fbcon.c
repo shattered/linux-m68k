@@ -40,6 +40,7 @@
 
 
 #include <linux/types.h>
+#include <linux/sched.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/tty.h>
@@ -49,18 +50,20 @@
 #include <linux/kd.h>
 #include <linux/malloc.h>
 
-#include <asm/bootinfo.h>
+#include <asm/setup.h>
 #include <asm/irq.h>
+
 #ifdef CONFIG_AMIGA
 #include <asm/amigahw.h>
 #include <asm/amigaints.h>
-#endif /* CONFIG_AMIGA */
+#endif
 #ifdef CONFIG_ATARI
 #include <asm/atariints.h>
 #endif
 #ifdef CONFIG_FB_CYBER
 #include "../amiga/s3blit.h"
-#endif /* CONFIG_FB_CYBER */
+#endif
+
 #include <linux/fb.h>
 #include <asm/font.h>
 #include <asm/machdep.h>
@@ -93,6 +96,8 @@ extern int console_blanked;
 #undef CONFIG_FBCON_24PACKED
 #undef CONFIG_FBCON_32PACKED
 #undef CONFIG_FBCON_CYBER
+#undef CONFIG_FBCON_VIRGE
+#undef CONFIG_FBCON_CLGEN
 
 
 /* Monochrome is default */
@@ -115,7 +120,26 @@ extern int console_blanked;
 #ifndef CONFIG_FBCON_CYBER
 #define CONFIG_FBCON_CYBER
 #endif
-#endif /* CONFIG_FB_CYBER */
+#endif
+
+#ifdef CONFIG_FB_CV3D
+#ifndef CONFIG_FBCON_VIRGE
+#define CONFIG_FBCON_VIRGE
+#endif
+#ifndef CONFIG_FBCON_8PACKED
+#define CONFIG_FBCON_8PACKED
+#endif
+#endif
+
+/* CLGen boards (only 8bit packed pixel accel consoles atm) */
+#ifdef CONFIG_FB_CLGEN
+#ifndef CONFIG_FBCON_CLGEN
+#define CONFIG_FBCON_CLGEN
+#ifndef CONFIG_FBCON_8PACKED
+#define CONFIG_FBCON_8PACKED
+#endif
+#endif
+#endif /* CONFIG_FB_CLGEN */
 
 #endif /* CONFIG_AMIGA */
 
@@ -149,9 +173,10 @@ extern int console_blanked;
 #undef CONFIG_FBCON_IPLAN2
 #endif
 
-#if defined(CONFIG_FBCON_CYBER) || defined(CONFIG_FBCON_8PACKED) || \
-    defined(CONFIG_FBCON_16PACKED) || defined(CONFIG_FBCON_24PACKED) || \
-    defined(CONFIG_FBCON_32PACKED)
+#if defined(CONFIG_FBCON_CYBER) || defined(CONFIG_FBCON_VIRGE) || \
+    defined(CONFIG_FBCON_8PACKED) || defined(CONFIG_FBCON_16PACKED) || \
+    defined(CONFIG_FBCON_24PACKED) || defined(CONFIG_FBCON_32PACKED) || \
+    defined(CONFIG_FBCON_CLGEN)
 #define CONFIG_FBCON_PACKED
 #else
 #undef CONFIG_FBCON_PACKED
@@ -243,7 +268,7 @@ static int fbcon_blank(int blank);
     *    Internal routines
     */
 
-static void fbcon_setup(int con, int setcol, int cls);
+static void fbcon_setup(int con, int setcol, int init);
 static __inline__ void *mymemclear_small(void *s, size_t count);
 static __inline__ void *mymemclear(void *s, size_t count);
 static __inline__ void *mymemset(void *s, size_t count);
@@ -269,7 +294,7 @@ static __inline__ u_short expand2w(u_char c);
 static __inline__ u_long expand2l(u_char c);
 static __inline__ u_short dup2w(u_char c);
 static __inline__ int real_y(struct display *p, int y);
-static void fbcon_vbl_handler(int irq, struct pt_regs *fp, void *dummy);
+static void fbcon_vbl_handler(int irq, void *dummy, struct pt_regs *fp);
 static void fbcon_bmove_rec(struct display *p, int sy, int sx, int dy, int dx,
                             int height, int width, u_int y_break);
 
@@ -385,8 +410,8 @@ static void bmove_8_packed(struct display *p, int sy, int sx, int dy, int dx,
                            int height, int width);
 static void clear_8_packed(struct vc_data *conp, struct display *p, int sy,
                            int sx, int height, int width);
-static void putc_8_packed(struct vc_data *conp, struct display *p, int c, int y,
-                          int x);
+static void putc_8_packed(struct vc_data *conp, struct display *p, int c,
+			  int y, int x);
 static void putcs_8_packed(struct vc_data *conp, struct display *p,
                            const char *s, int count, int y, int x);
 static void rev_char_8_packed(struct display *p, int x, int y);
@@ -417,10 +442,10 @@ static void rev_char_16_packed(struct display *p, int x, int y);
 #ifdef CONFIG_FBCON_CYBER
 static void bmove_cyber(struct display *p, int sy, int sx, int dy, int dx,
                         int height, int width);
-static void clear_cyber(struct vc_data *conp, struct display *p, int sy, int sx,
-                        int height, int width);
-static void putc_cyber(struct vc_data *conp, struct display *p, int c, int y,
-                       int x);
+static void clear_cyber(struct vc_data *conp, struct display *p,
+			int sy, int sx, int height, int width);
+static void putc_cyber(struct vc_data *conp, struct display *p, int c,
+		       int y, int x);
 static void putcs_cyber(struct vc_data *conp, struct display *p, const char *s,
                         int count, int y, int x);
 static void rev_char_cyber(struct display *p, int x, int y);
@@ -433,7 +458,41 @@ extern void Cyber_BitBLT(u_short curx, u_short cury, u_short destx,
 extern void Cyber_RectFill(u_short x, u_short y, u_short width, u_short height,
                            u_short mode, u_short color);
 extern void Cyber_MoveCursor(u_short x, u_short y);
-#endif /* CONFIG_FBCON_CYBER */
+#endif
+
+#ifdef CONFIG_FBCON_VIRGE
+static void bmove_cyber3d(struct display *p, int sy, int sx, int dy, int dx,
+			  int height, int width);
+static void clear_cyber3d(struct vc_data *conp, struct display *p, int
+			  sy, int sx, int height, int width);
+extern void Cyber3d_BitBLT(u_short curx, u_short cury, u_short destx,
+                         u_short desty, u_short width, u_short height);
+extern void Cyber3d_RectFill(u_short x, u_short y, u_short width,
+			     u_short height, u_short color);
+#endif
+
+   /*
+    *    Cirrus Logic boards (accelerated)
+    */
+
+#ifdef CONFIG_FBCON_CLGEN
+static void bmove_clgen(struct display *p, int sy, int sx, int dy, int dx,
+                        int height, int width);
+static void clear_clgen(struct vc_data *conp, struct display *p, int sy, int sx,
+                        int height, int width);
+static void putc_clgen(struct vc_data *conp, struct display *p, int c, int y,
+                       int x);
+static void putcs_clgen(struct vc_data *conp, struct display *p, const char *s,
+                        int count, int y, int x);
+static void rev_char_clgen(struct display *p, int x, int y);
+
+extern void clgen_WaitBLT(void);
+extern void clgen_BitBLT(u_short curx, u_short cury, u_short destx,
+                         u_short desty, u_short width, u_short height,
+                         u_short mode);
+extern void clgen_RectFill(u_short x, u_short y, u_short width, u_short height,
+                           u_short mode, u_short color);
+#endif /* CONFIG_FBCON_CLGEN */
 
 
    /*
@@ -503,9 +562,22 @@ struct display_switch dispsw_16_packed = {
 
 #ifdef CONFIG_FBCON_CYBER
 struct display_switch dispsw_cyber = {
-   bmove_cyber, clear_cyber, putc_cyber, putcs_cyber, rev_char_cyber
+	bmove_cyber, clear_cyber, putc_cyber, putcs_cyber, rev_char_cyber
 };
-#endif /* CONFIG_FBCON_CYBER */
+#endif
+
+#ifdef CONFIG_FBCON_VIRGE
+struct display_switch dispsw_cyber3d = {
+	bmove_cyber3d, clear_cyber3d, putc_8_packed, putcs_8_packed,
+	rev_char_8_packed
+};
+#endif
+
+#ifdef CONFIG_FBCON_CLGEN
+struct display_switch dispsw_clgen = {
+   bmove_clgen, clear_clgen, putc_clgen, putcs_clgen, rev_char_clgen
+};
+#endif /* CONFIG_FBCON_CLGEN */
 
 
 static u_long fbcon_startup(u_long kmem_start, char **display_desc)
@@ -520,19 +592,19 @@ static u_long fbcon_startup(u_long kmem_start, char **display_desc)
 #ifdef CONFIG_AMIGA
    if (MACH_IS_AMIGA) {
       cursor_blink_rate = AMIGA_CURSOR_BLINK_RATE;
-      irqres = add_isr(IRQ_AMIGA_VERTB, fbcon_vbl_handler, 0, NULL,
-                       "console/cursor");
+      irqres = request_irq(IRQ_AMIGA_VERTB, fbcon_vbl_handler, 0,
+                           "console/cursor", fbcon_vbl_handler);
    }
 #endif /* CONFIG_AMIGA */
 #ifdef CONFIG_ATARI
    if (MACH_IS_ATARI) {
       cursor_blink_rate = ATARI_CURSOR_BLINK_RATE;
-      irqres = add_isr(IRQ_AUTO_4, fbcon_vbl_handler, IRQ_TYPE_PRIO, NULL,
-		       "console/cursor");
+      irqres = request_irq(IRQ_AUTO_4, fbcon_vbl_handler, IRQ_TYPE_PRIO,
+                           "console/cursor", fbcon_vbl_handler);
    }
 #endif /* CONFIG_ATARI */
 
-   if (!irqres)
+   if (irqres)
       panic("fbcon_startup: Couldn't add vblank interrupt");
 
    return(kmem_start);
@@ -546,7 +618,7 @@ static void fbcon_init(struct vc_data *conp)
    if (unit)
       disp[unit] = disp[0];
    disp[unit].conp = conp;
-   fbcon_setup(unit, 1, 0);
+   fbcon_setup(unit, 1, 1);
 }
 
 
@@ -559,15 +631,16 @@ static int fbcon_deinit(struct vc_data *conp)
 
 static int fbcon_changevar(int con)
 {
-   fbcon_setup(con, 1, 1);
+   fbcon_setup(con, 1, 0);
    return(0);
 }
 
 
-static void fbcon_setup(int con, int setcol, int cls)
+static void fbcon_setup(int con, int setcol, int init)
 {
    struct display *p = &disp[con];
    struct vc_data *conp = p->conp;
+   int nr_rows, nr_cols;
 
    p->var.xoffset = p->var.yoffset = p->yscroll = 0;  /* reset wrap/pan */
 
@@ -587,8 +660,15 @@ static void fbcon_setup(int con, int setcol, int cls)
    else
       p->scrollmode = SCROLL_YMOVE;
 
-   conp->vc_cols = p->var.xres/p->fontwidth;
-   conp->vc_rows = p->var.yres/p->fontheight;
+   nr_cols = p->var.xres/p->fontwidth;
+   nr_rows = p->var.yres/p->fontheight;
+   /* ++guenther: console.c:vc_allocate() relies on initializing vc_{cols,rows},
+    * but we must not set those if we are only resizing the console.
+    */
+   if (init) {
+      conp->vc_cols = nr_cols;
+      conp->vc_rows = nr_rows;
+   }
    p->vrows = p->var.yres_virtual/p->fontheight;
    conp->vc_can_do_color = p->var.bits_per_pixel != 1;
 
@@ -651,10 +731,21 @@ static void fbcon_setup(int con, int setcol, int cls)
       p->next_line = p->var.xres_virtual*p->var.bits_per_pixel>>3;
       p->next_plane = 0;
 #ifdef CONFIG_FBCON_CYBER
-      if (p->var.accel == FB_ACCEL_CYBERVISION)
+      if (p->var.accel == FB_ACCEL_S3TRIO64)
          p->dispsw = &dispsw_cyber;
       else
-#endif /* CONFIG_FBCON_CYBER */
+#endif
+#ifdef CONFIG_FBCON_VIRGE
+      if (p->var.accel == FB_ACCEL_S3VIRGE)
+	 p->dispsw = &dispsw_cyber3d;
+      else
+#endif
+#ifdef CONFIG_FBCON_CLGEN
+/* ### to be extended with handling of different depths (1bit, 24..?) */
+      if (p->var.accel == FB_ACCEL_CLGEN)
+         p->dispsw = &dispsw_clgen;
+      else
+#endif /* CONFIG_FBCON_CLGEN */
 #ifdef CONFIG_FBCON_8PACKED
       if (p->var.bits_per_pixel == 8)
          p->dispsw = &dispsw_8_packed;
@@ -700,8 +791,8 @@ fail:
       p->bgcol = 0;
    }
 
-   if (cls)
-      vc_resize_con(conp->vc_rows, conp->vc_cols, con);
+   if (!init)
+      vc_resize_con(nr_rows, nr_cols, con);
 }
 
 
@@ -1487,7 +1578,7 @@ static int fbcon_cursor(struct vc_data *conp, int mode)
 }
 
 
-static void fbcon_vbl_handler(int irq, struct pt_regs *fp, void *dummy)
+static void fbcon_vbl_handler(int irq, void *dummy, struct pt_regs *fp)
 {
    struct display *p;
 
@@ -1713,7 +1804,7 @@ static int fbcon_get_font(struct vc_data *conp, int *w, int *h, char *data)
 {
 	int unit = conp->vc_num;
 	struct display *p = &disp[unit];
-	int i, size, alloc;
+	int i, j, size, alloc;
 
 	size = (p->fontwidth+7)/8 * p->fontheight * 256;
 	alloc = (*w+7)/8 * *h * 256;
@@ -1724,10 +1815,9 @@ static int fbcon_get_font(struct vc_data *conp, int *w, int *h, char *data)
 		/* allocation length not sufficient */
 		return( -ENAMETOOLONG );
 
-	if ((i = verify_area( VERIFY_WRITE, (void *)data, size )))
-		return i;
-
-	memcpy_tofs( data, p->fontdata, size );
+	for (i = 0; i < 256; i++)
+		for (j = 0; j < p->fontheight; j++)
+			data[i*32+j] = p->fontdata[i*p->fontheight+j];
 	return( 0 );
 }
 
@@ -1738,7 +1828,7 @@ static int fbcon_set_font(struct vc_data *conp, int w, int h, char *data)
 {
 	int unit = conp->vc_num;
 	struct display *p = &disp[unit];
-	int i, size, userspace = 1, resize;
+	int i, j, size, userspace = 1, resize;
 	char *old_data = NULL, *new_data;
 
 	if (w < 0)
@@ -1794,13 +1884,15 @@ static int fbcon_set_font(struct vc_data *conp, int w, int h, char *data)
 		old_data = p->fontdata;
 	
 	if (userspace) {
-		if ((i = verify_area( VERIFY_READ, (void *)data, size )))
-			return i;
 		if (!(new_data = kmalloc( sizeof(int)+size, GFP_USER )))
 			return( -ENOMEM );
 		new_data += sizeof(int);
 		REFCOUNT(new_data) = 1; /* usage counter */
-		memcpy_fromfs( new_data, data, size );
+
+		for (i = 0; i < 256; i++)
+			for (j = 0; j < h; j++)
+				new_data[i*h+j] = data[i*32+j];
+
 		p->fontdata = new_data;
 		p->userfont = 1;
 	}
@@ -1814,6 +1906,9 @@ static int fbcon_set_font(struct vc_data *conp, int w, int h, char *data)
   activate:
 	if (resize) {
 		p->var.xoffset = p->var.yoffset = p->yscroll = 0;  /* reset wrap/pan */
+		/* Adjust the virtual screen-size to fontheight*rows */
+		p->var.yres_virtual = (p->var.yres/h)*h;
+		p->vrows = p->var.yres_virtual/h;
 		if (divides(p->ywrapstep, p->fontheight))
 			p->scrollmode = SCROLL_YWRAP;
 		else if (divides(p->ypanstep, p->fontheight) &&
@@ -3609,30 +3704,29 @@ static void rev_char_16_packed(struct display *p, int x, int y)
 
 #ifdef CONFIG_FBCON_CYBER
 
-   /*
-    *    Cybervision (accelerated)
-    */
+/*
+ *    Cybervision (accelerated)
+ */
 
 static void bmove_cyber(struct display *p, int sy, int sx, int dy, int dx,
                         int height, int width)
 {
 	sx *= 8; dx *= 8; width *= 8;
 	Cyber_BitBLT((u_short)sx, (u_short)(sy*p->fontheight), (u_short)dx,
-                (u_short)(dy*p->fontheight), (u_short)width,
-                (u_short)(height*p->fontheight), (u_short)S3_NEW);
+		     (u_short)(dy*p->fontheight), (u_short)width,
+		     (u_short)(height*p->fontheight), (u_short)S3_NEW);
 }
 
-
-static void clear_cyber(struct vc_data *conp, struct display *p, int sy, int sx,
-                        int height, int width)
+static void clear_cyber(struct vc_data *conp, struct display *p,
+			int sy, int sx, int height, int width)
 {
-   u_char bg;
+	u_char bg;
         
 	sx *= 8; width *= 8;
 	bg = attr_bgcol_ec(p,conp);
-   Cyber_RectFill((u_short)sx, (u_short)(sy*p->fontheight), (u_short)width,
-                  (u_short)(height*p->fontheight), (u_short)S3_NEW,
-                  (u_short)bg); 
+	Cyber_RectFill((u_short)sx, (u_short)(sy*p->fontheight),
+		       (u_short)width, (u_short)(height*p->fontheight),
+		       (u_short)S3_NEW, (u_short)bg); 
 }
 
 
@@ -3643,18 +3737,18 @@ static void putc_cyber(struct vc_data *conp, struct display *p, int c, int y,
 	u_long tmp;
 	u_int rows, reverse, underline; 
 	u_char d;
-   u_char fg, bg;
+	u_char fg, bg;
 
-   c &= 0xff;
+	c &= 0xff;
 
 	dest = p->screen_base+y*p->fontheight*p->next_line+8*x;
 	cdat = p->fontdata+(c*p->fontheight);
-   fg = disp->fgcol;
-   bg = disp->bgcol;
+	fg = disp->fgcol;
+	bg = disp->bgcol;
 	reverse = conp->vc_reverse;
 	underline = conp->vc_underline;
 
-   Cyber_WaitBlit();
+	Cyber_WaitBlit();
 	for (rows = p->fontheight; rows--; dest += p->next_line) {
   		d = *cdat++;
 
@@ -3663,16 +3757,16 @@ static void putc_cyber(struct vc_data *conp, struct display *p, int c, int y,
 		if (reverse)
 			d = ~d;
 
-      tmp =  ((d & 0x80) ? fg : bg) << 24;
-      tmp |= ((d & 0x40) ? fg : bg) << 16;
-      tmp |= ((d & 0x20) ? fg : bg) << 8;
-      tmp |= ((d & 0x10) ? fg : bg);
-      *((u_long*) dest) = tmp;
-      tmp =  ((d & 0x8) ? fg : bg) << 24;
-      tmp |= ((d & 0x4) ? fg : bg) << 16;
-      tmp |= ((d & 0x2) ? fg : bg) << 8;
-      tmp |= ((d & 0x1) ? fg : bg);
-      *((u_long*) dest + 1) = tmp;
+		tmp =  ((d & 0x80) ? fg : bg) << 24;
+		tmp |= ((d & 0x40) ? fg : bg) << 16;
+		tmp |= ((d & 0x20) ? fg : bg) << 8;
+		tmp |= ((d & 0x10) ? fg : bg);
+		*((u_long*) dest) = tmp;
+		tmp =  ((d & 0x8) ? fg : bg) << 24;
+		tmp |= ((d & 0x4) ? fg : bg) << 16;
+		tmp |= ((d & 0x2) ? fg : bg) << 8;
+		tmp |= ((d & 0x1) ? fg : bg);
+		*((u_long*) dest + 1) = tmp;
 	}
 }
 
@@ -3681,22 +3775,22 @@ static void putcs_cyber(struct vc_data *conp, struct display *p, const char *s,
                         int count, int y, int x)
 {
 	u_char *dest, *dest0, *cdat;
-   u_long tmp;
+	u_long tmp;
 	u_int rows, reverse, underline;
 	u_char c, d;
-   u_char fg, bg;
+	u_char fg, bg;
 
 	dest0 = p->screen_base+y*p->fontheight*p->next_line+8*x;
-   fg = disp->fgcol;
-   bg = disp->bgcol;
+	fg = disp->fgcol;
+	bg = disp->bgcol;
 	reverse = conp->vc_reverse;
 	underline = conp->vc_underline;
 
-   Cyber_WaitBlit();
+	Cyber_WaitBlit();
 	while (count--) {
 		c = *s++;
 		dest = dest0;
-      dest0 += 8;
+		dest0 += 8;
 		cdat = p->fontdata+(c*p->fontheight);
 		for (rows = p->fontheight; rows--; dest += p->next_line) {
  			d = *cdat++;
@@ -3706,16 +3800,16 @@ static void putcs_cyber(struct vc_data *conp, struct display *p, const char *s,
 			if (reverse)
 				d = ~d;
 
-         tmp =  ((d & 0x80) ? fg : bg) << 24;
-         tmp |= ((d & 0x40) ? fg : bg) << 16;
-         tmp |= ((d & 0x20) ? fg : bg) << 8;
-         tmp |= ((d & 0x10) ? fg : bg);
-         *((u_long*) dest) = tmp;
-         tmp =  ((d & 0x8) ? fg : bg) << 24;
-         tmp |= ((d & 0x4) ? fg : bg) << 16;
-         tmp |= ((d & 0x2) ? fg : bg) << 8;
-         tmp |= ((d & 0x1) ? fg : bg);
-         *((u_long*) dest + 1) = tmp;
+			tmp =  ((d & 0x80) ? fg : bg) << 24;
+			tmp |= ((d & 0x40) ? fg : bg) << 16;
+			tmp |= ((d & 0x20) ? fg : bg) << 8;
+			tmp |= ((d & 0x10) ? fg : bg);
+			*((u_long*) dest) = tmp;
+			tmp =  ((d & 0x8) ? fg : bg) << 24;
+			tmp |= ((d & 0x4) ? fg : bg) << 16;
+			tmp |= ((d & 0x2) ? fg : bg) << 8;
+			tmp |= ((d & 0x1) ? fg : bg);
+			*((u_long*) dest + 1) = tmp;
 		}
 	}
 }
@@ -3725,27 +3819,171 @@ static void rev_char_cyber(struct display *p, int x, int y)
 {
 	u_char *dest;
 	u_int rows;
-   u_char fg, bg;
+	u_char fg, bg;
 
-   fg = disp->fgcol;
-   bg = disp->bgcol;
+	fg = disp->fgcol;
+	bg = disp->bgcol;
 
 	dest = p->screen_base+y*p->fontheight*p->next_line+8*x;
-   Cyber_WaitBlit();
+	Cyber_WaitBlit();
 	for (rows = p->fontheight; rows--; dest += p->next_line) {
 		*dest = (*dest == fg) ? bg : fg;
-      *(dest+1) = (*(dest + 1) == fg) ? bg : fg;
-      *(dest+2) = (*(dest + 2) == fg) ? bg : fg;
-      *(dest+3) = (*(dest + 3) == fg) ? bg : fg;
-      *(dest+4) = (*(dest + 4) == fg) ? bg : fg;
-      *(dest+5) = (*(dest + 5) == fg) ? bg : fg;
-      *(dest+6) = (*(dest + 6) == fg) ? bg : fg;
-      *(dest+7) = (*(dest + 7) == fg) ? bg : fg;
+		*(dest+1) = (*(dest + 1) == fg) ? bg : fg;
+		*(dest+2) = (*(dest + 2) == fg) ? bg : fg;
+		*(dest+3) = (*(dest + 3) == fg) ? bg : fg;
+		*(dest+4) = (*(dest + 4) == fg) ? bg : fg;
+		*(dest+5) = (*(dest + 5) == fg) ? bg : fg;
+		*(dest+6) = (*(dest + 6) == fg) ? bg : fg;
+		*(dest+7) = (*(dest + 7) == fg) ? bg : fg;
 	}
 }
 
 #endif /* CONFIG_FBCON_CYBER */
 
+#ifdef CONFIG_FBCON_VIRGE
+static void bmove_cyber3d(struct display *p, int sy, int sx, int dy, int dx,
+			  int height, int width)
+{
+	sx *= 8; dx *= 8; width *= 8;
+	Cyber3d_BitBLT((u_short)sx, (u_short)(sy*p->fontheight), (u_short)dx,
+		       (u_short)(dy*p->fontheight), (u_short)width,
+		       (u_short)(height*p->fontheight));
+}
+
+static void clear_cyber3d(struct vc_data *conp, struct display *p,
+			  int sy, int sx, int height, int width)
+{
+	unsigned char bg;
+
+	sx *= 8; width *= 8;
+	bg = attr_bgcol_ec(p,conp);
+	Cyber3d_RectFill((u_short)sx, (u_short)(sy*p->fontheight),
+			 (u_short)width, (u_short)(height*p->fontheight),
+			 (u_short)bg);
+}
+
+#endif
+
+
+/* ====================================================================== */
+
+#ifdef CONFIG_FBCON_CLGEN
+
+   /*
+    *    Cirrus Logic boards (accelerated)
+    */
+
+static void bmove_clgen(struct display *p, int sy, int sx, int dy, int dx,
+                        int height, int width)
+{
+	if (width == 0 || height == 0)
+		return;
+	sx *= 8; 
+
+	dx *= 8; 
+	width *= 8;
+	clgen_BitBLT((u_short)sx, (u_short)(sy*p->fontheight), (u_short)dx,
+		(u_short)(dy*p->fontheight), (u_short)width,
+		(u_short)(height*p->fontheight), (u_short)p->line_length);
+}
+
+
+static void clear_clgen(struct vc_data *conp, struct display *p, int sy, int sx,
+                        int height, int width)
+{
+	u_char bg;
+        
+	if (width == 0 || height == 0)
+		return;
+
+	sx *= 8;
+	width *= 8;
+	bg = attr_bgcol_ec(p,conp);
+	clgen_RectFill((u_short)sx, (u_short)(sy*p->fontheight), (u_short)width,
+		(u_short)(height*p->fontheight), bg, p->line_length); 
+}
+
+
+static void putc_clgen(struct vc_data *conp, struct display *p, int c, int y,
+                       int x)
+{
+	u_char *dest,*cdat;
+	int bytes=p->next_line,rows;
+	ulong eorx,fgx,bgx;
+
+	c &= 0xff;
+
+	dest = p->screen_base + y * p->fontheight * bytes + x * 8;
+	cdat = p->fontdata + c * p->fontheight;
+
+	fgx=attr_fgcol(p,conp);
+	bgx=attr_bgcol(p,conp);
+	fgx |= (fgx << 8);
+	fgx |= (fgx << 16);
+	bgx |= (bgx << 8);
+	bgx |= (bgx << 16);
+	eorx = fgx ^ bgx;
+
+	clgen_WaitBLT();
+
+	for (rows = p->fontheight ; rows-- ; dest += bytes) {
+		((u_long *)dest)[0]=
+			(nibbletab_8_packed[*cdat >> 4] & eorx) ^ bgx;
+		((u_long *)dest)[1]=
+			(nibbletab_8_packed[*cdat++ & 0xf] & eorx) ^ bgx;
+	}
+}
+
+
+static void putcs_clgen(struct vc_data *conp, struct display *p, const char *s,
+                        int count, int y, int x)
+{
+	u_char *cdat, c, *dest, *dest0;
+	int rows,bytes=p->next_line;
+	u_long eorx, fgx, bgx;
+
+	dest0 = p->screen_base + y * p->fontheight * bytes + x * 8;
+	fgx=attr_fgcol(p,conp);
+	bgx=attr_bgcol(p,conp);
+	fgx |= (fgx << 8);
+	fgx |= (fgx << 16);
+	bgx |= (bgx << 8);
+	bgx |= (bgx << 16);
+	eorx = fgx ^ bgx;
+
+	clgen_WaitBLT();
+
+	while (count--) {
+		c = *s++;
+		cdat = p->fontdata + c * p->fontheight;
+
+		for (rows = p->fontheight, dest = dest0; rows-- ; dest += bytes) {
+			((u_long *)dest)[0]=
+			(nibbletab_8_packed[*cdat >> 4] & eorx) ^ bgx;
+			((u_long *)dest)[1]=
+			(nibbletab_8_packed[*cdat++ & 0xf] & eorx) ^ bgx;
+		}
+		dest0+=8;
+	}
+}
+
+
+static void rev_char_clgen(struct display *p, int x, int y)
+{
+	u_char *dest;
+	int bytes=p->next_line, rows;
+
+	dest = p->screen_base + y * p->fontheight * bytes + x * 8;
+
+	clgen_WaitBLT();
+
+	for (rows = p->fontheight ; rows-- ; dest += bytes) {
+		((u_long *)dest)[0] ^= 0x0f0f0f0f;
+		((u_long *)dest)[1] ^= 0x0f0f0f0f;
+	}
+}
+
+#endif /* CONFIG_FBCON_CLGEN */
 
 /* ====================================================================== */
 

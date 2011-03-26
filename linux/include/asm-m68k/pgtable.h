@@ -1,24 +1,30 @@
 #ifndef _M68K_PGTABLE_H
 #define _M68K_PGTABLE_H
 
+#include<asm/setup.h>
+
 #ifndef __ASSEMBLY__
+#include <linux/config.h>
 
 /*
  * This file contains the functions and defines necessary to modify and use
  * the m68k page table tree.
  */
 
-#define __flush_tlb() \
-do { 	\
-	if (m68k_is040or060) \
-		__asm__ __volatile__(".word 0xf510\n"::); /* pflushan */ \
-	else \
-		__asm__ __volatile__("pflusha\n"::); \
-} while (0)
+/*
+ * flush all atc entries (user-space entries only for the 680[46]0).
+ */
+static inline void __flush_tlb(void)
+{
+	if (CPU_IS_040_OR_060)
+		__asm__ __volatile__(".word 0xf510\n"::); /* pflushan */
+	else
+		__asm__ __volatile__("pflusha\n"::);
+}
 
 static inline void __flush_tlb_one(unsigned long addr)
 {
-	if (m68k_is040or060) {
+	if (CPU_IS_040_OR_060) {
 		register unsigned long a0 __asm__ ("a0") = addr;
 		__asm__ __volatile__(".word 0xf508" /* pflush (%a0) */
 				     : : "a" (a0));
@@ -27,7 +33,17 @@ static inline void __flush_tlb_one(unsigned long addr)
 }
 
 #define flush_tlb() __flush_tlb()
-#define flush_tlb_all() flush_tlb()
+
+/*
+ * flush all atc entries (both kernel and user-space entries).
+ */
+static inline void flush_tlb_all(void)
+{
+	if (CPU_IS_040_OR_060)
+		__asm__ __volatile__(".word 0xf518\n"::); /* pflusha */
+	else
+		__asm__ __volatile__("pflusha\n"::);
+}
 
 static inline void flush_tlb_mm(struct mm_struct *mm)
 {
@@ -53,7 +69,12 @@ static inline void flush_tlb_range(struct mm_struct *mm,
  * within a page table are directly modified.  Thus, the following
  * hook is made available.
  */
-#define set_pte(pteptr, pteval) ((*(pteptr)) = (pteval))
+#define set_pte(pteptr, pteval) do{	\
+	((*(pteptr)) = (pteval));	\
+	if (CPU_IS_060)			\
+		__asm__ __volatile__(".word 0xf518\n"::); /* pflusha */ \
+	} while(0)
+
 
 /* PMD_SHIFT determines the size of the area a second-level page table can map */
 #define PMD_SHIFT	22
@@ -109,6 +130,8 @@ typedef pte_table pte_tablepage[PTE_TABLES_PER_PAGE];
 #define _PAGE_RONLY	0x004
 #define _PAGE_ACCESSED	0x008
 #define _PAGE_DIRTY	0x010
+#define _PAGE_SUPER	0x080	/* 68040 supervisor only */
+#define _PAGE_FAKE_SUPER 0x200	/* fake supervisor only on 680[23]0 */
 #define _PAGE_GLOBAL040	0x400	/* 68040 global bit, used for kva descs */
 #define _PAGE_COW	0x800	/* implemented in software */
 #define _PAGE_NOCACHE030 0x040	/* 68030 no-cache mode */
@@ -120,40 +143,60 @@ typedef pte_table pte_tablepage[PTE_TABLES_PER_PAGE];
 #define _DESCTYPE_MASK	0x003
 
 #define _CACHEMASK040	(~0x060)
-#define _TABLE_MASK	(0xfffffff0)
+#define _TABLE_MASK	(0xfffffe00)
 
 #define _PAGE_TABLE	(_PAGE_SHORT)
 #define _PAGE_CHG_MASK  (PAGE_MASK | _PAGE_ACCESSED | _PAGE_DIRTY | _PAGE_NOCACHE)
 
 #ifndef __ASSEMBLY__
 
-#define PAGE_NONE	__pgprot(_PAGE_PRESENT | _PAGE_RONLY | _PAGE_ACCESSED | _PAGE_CACHE040)
-#define PAGE_SHARED	__pgprot(_PAGE_PRESENT | _PAGE_ACCESSED | _PAGE_CACHE040)
-#define PAGE_COPY	__pgprot(_PAGE_PRESENT | _PAGE_RONLY | _PAGE_ACCESSED | _PAGE_CACHE040)
-#define PAGE_READONLY	__pgprot(_PAGE_PRESENT | _PAGE_RONLY | _PAGE_ACCESSED | _PAGE_CACHE040)
-#define PAGE_KERNEL	__pgprot(_PAGE_PRESENT | _PAGE_DIRTY | _PAGE_ACCESSED | _PAGE_CACHE040)
+/* This is the cache mode to be used for pages containing page descriptors for
+ * processors >= '040. It is in pte_mknocache(), and the variable is defined
+ * and initialized in head.S */
+extern int m68k_pgtable_cachemode;
+
+#if defined(CONFIG_M68040_OR_M68060_ONLY)
+#define mm_cachebits _PAGE_CACHE040
+#elif defined(CONFIG_M68020_OR_M68030_ONLY)
+#define mm_cachebits 0
+#else
+extern unsigned long mm_cachebits;
+#endif
+
+#define PAGE_NONE	__pgprot(_PAGE_PRESENT | _PAGE_RONLY | _PAGE_ACCESSED | mm_cachebits)
+#define PAGE_SHARED	__pgprot(_PAGE_PRESENT | _PAGE_ACCESSED | mm_cachebits)
+#define PAGE_COPY	__pgprot(_PAGE_PRESENT | _PAGE_RONLY | _PAGE_ACCESSED | mm_cachebits)
+#define PAGE_READONLY	__pgprot(_PAGE_PRESENT | _PAGE_RONLY | _PAGE_ACCESSED | mm_cachebits)
+#define PAGE_KERNEL	__pgprot(_PAGE_PRESENT | _PAGE_DIRTY | _PAGE_ACCESSED | mm_cachebits)
+
+/* Alternate definitions that are compile time constants, for
+   initializing protection_map.  The cachebits are fixed later.  */
+#define PAGE_NONE_C	__pgprot(_PAGE_PRESENT | _PAGE_RONLY | _PAGE_ACCESSED)
+#define PAGE_SHARED_C	__pgprot(_PAGE_PRESENT | _PAGE_ACCESSED)
+#define PAGE_COPY_C	__pgprot(_PAGE_PRESENT | _PAGE_RONLY | _PAGE_ACCESSED)
+#define PAGE_READONLY_C	__pgprot(_PAGE_PRESENT | _PAGE_RONLY | _PAGE_ACCESSED)
 
 /*
  * The m68k can't do page protection for execute, and considers that the same are read.
  * Also, write permissions imply read permissions. This is the closest we can get..
  */
-#define __P000	PAGE_NONE
-#define __P001	PAGE_READONLY
-#define __P010	PAGE_COPY
-#define __P011	PAGE_COPY
-#define __P100	PAGE_READONLY
-#define __P101	PAGE_READONLY
-#define __P110	PAGE_COPY
-#define __P111	PAGE_COPY
+#define __P000	PAGE_NONE_C
+#define __P001	PAGE_READONLY_C
+#define __P010	PAGE_COPY_C
+#define __P011	PAGE_COPY_C
+#define __P100	PAGE_READONLY_C
+#define __P101	PAGE_READONLY_C
+#define __P110	PAGE_COPY_C
+#define __P111	PAGE_COPY_C
 
-#define __S000	PAGE_NONE
-#define __S001	PAGE_READONLY
-#define __S010	PAGE_SHARED
-#define __S011	PAGE_SHARED
-#define __S100	PAGE_READONLY
-#define __S101	PAGE_READONLY
-#define __S110	PAGE_SHARED
-#define __S111	PAGE_SHARED
+#define __S000	PAGE_NONE_C
+#define __S001	PAGE_READONLY_C
+#define __S010	PAGE_SHARED_C
+#define __S011	PAGE_SHARED_C
+#define __S100	PAGE_READONLY_C
+#define __S101	PAGE_READONLY_C
+#define __S110	PAGE_SHARED_C
+#define __S111	PAGE_SHARED_C
 
 /* zero page used for uninitialized stuff */
 extern unsigned long empty_zero_page;
@@ -210,7 +253,7 @@ extern inline void pmd_set(pmd_t * pmdp, pte_t * ptep)
 
 	ptep = (pte_t *) VTOP(ptep);
 	for (i = 0; i < 16; i++, ptep += PTRS_PER_PTE/16)
-		pmdp->pmd[i] = _PAGE_TABLE | (unsigned long)ptep;
+		pmdp->pmd[i] = _PAGE_TABLE | _PAGE_ACCESSED | (unsigned long)ptep;
 }
 
 /* early termination version of the above */
@@ -220,11 +263,11 @@ extern inline void pmd_set_et(pmd_t * pmdp, pte_t * ptep)
 
 	ptep = (pte_t *) VTOP(ptep);
 	for (i = 0; i < 16; i++, ptep += PTRS_PER_PTE/16)
-		pmdp->pmd[i] = _PAGE_PRESENT | (unsigned long)ptep;
+		pmdp->pmd[i] = _PAGE_PRESENT | _PAGE_ACCESSED | (unsigned long)ptep;
 }
 
 extern inline void pgd_set(pgd_t * pgdp, pmd_t * pmdp)
-{ pgd_val(*pgdp) = _PAGE_TABLE | VTOP(pmdp); }
+{ pgd_val(*pgdp) = _PAGE_TABLE | _PAGE_ACCESSED | VTOP(pmdp); }
 
 extern inline unsigned long pte_page(pte_t pte)
 { return PTOV(pte_val(pte) & PAGE_MASK); }
@@ -237,7 +280,7 @@ extern inline unsigned long pgd_page(pgd_t pgd)
 { return PTOV(pgd_val(pgd) & _TABLE_MASK); }
 
 extern inline int pte_none(pte_t pte)		{ return !pte_val(pte); }
-extern inline int pte_present(pte_t pte)	{ return pte_val(pte) & _PAGE_PRESENT; }
+extern inline int pte_present(pte_t pte)	{ return pte_val(pte) & (_PAGE_PRESENT | _PAGE_FAKE_SUPER); }
 extern inline void pte_clear(pte_t *ptep)	{ pte_val(*ptep) = 0; }
 
 extern inline int pmd_none2(pmd_t *pmd)		{ return !pmd_val(*pmd); }
@@ -290,14 +333,11 @@ extern inline pte_t pte_mkcache(pte_t pte)	{ pte_val(pte) = (pte_val(pte) & _CAC
 /* to set the page-dir */
 extern inline void SET_PAGE_DIR(struct task_struct * tsk, pgd_t * pgdir)
 {
-	tsk->tss.pagedir_v = (unsigned long *)pgdir;
-	tsk->tss.pagedir_p = VTOP(pgdir);
-	tsk->tss.crp[0] = 0x80000000 | _PAGE_SHORT;
-	tsk->tss.crp[1] = tsk->tss.pagedir_p;
+	tsk->tss.crp[0] = 0x80000000 | _PAGE_TABLE;
+	tsk->tss.crp[1] = VTOP(pgdir);
 	if (tsk == current) {
-		if (m68k_is040or060)
-			__asm__ __volatile__ (".word 0xf510\n\t" /* pflushan */
-					      "movel %0@,%/d0\n\t"
+		if (CPU_IS_040_OR_060)
+			__asm__ __volatile__ ("movel %0@,%/d0\n\t"
 					      ".long 0x4e7b0806\n\t"
 					      /* movec d0,urp */
 					      : : "a" (&tsk->tss.crp[1])
@@ -349,10 +389,16 @@ extern inline pte_t * pte_offset(pmd_t * pmdp, unsigned long address)
 
 extern inline void nocache_page (unsigned long vaddr)
 {
-	if (m68k_is040or060) {
+	if (CPU_IS_040_OR_060) {
 		pgd_t *dir;
 		pmd_t *pmdp;
 		pte_t *ptep;
+
+		if(CPU_IS_060)
+			__asm__ __volatile__ ("movel %0,%/a0\n\t"
+					      ".word 0xf470"
+					      : : "g" (VTOP(vaddr))
+					      : "a0");
 
 		dir = pgd_offset_k(vaddr);
 		pmdp = pmd_offset(dir,vaddr);
@@ -363,7 +409,7 @@ extern inline void nocache_page (unsigned long vaddr)
 
 static inline void cache_page (unsigned long vaddr)
 {
-	if (m68k_is040or060) {
+	if (CPU_IS_040_OR_060) {
 		pgd_t *dir;
 		pmd_t *pmdp;
 		pte_t *ptep;
@@ -514,10 +560,10 @@ extern inline pgd_t * pgd_alloc(void)
 
 #define flush_icache() \
 do { \
-	if (m68k_is040or060) \
-		asm ("nop; .word 0xf498 /* cinva %%ic */"); \
+	if (CPU_IS_040_OR_060) \
+		asm __volatile__ ("nop; .word 0xf498 /* cinva %%ic */"); \
 	else \
-		asm ("movec %/cacr,%/d0;" \
+		asm __volatile__ ("movec %/cacr,%/d0;" \
 		     "oriw %0,%/d0;" \
 		     "movec %/d0,%/cacr" \
 		     : /* no outputs */ \
@@ -552,7 +598,7 @@ extern void cache_push_v (unsigned long vaddr, int len);
    process changes.  */
 #define __flush_cache_all()						\
     do {								\
-	if (m68k_is040or060)					        \
+	if (CPU_IS_040_OR_060)					        \
                __asm__ __volatile__ ("nop; .word 0xf478\n" ::);         \
         else                                                            \
 	       __asm__ __volatile__ ("movec %%cacr,%%d0\n\t"		\
@@ -563,7 +609,7 @@ extern void cache_push_v (unsigned long vaddr, int len);
 
 #define __flush_cache_030()						\
     do {								\
-	if (m68k_is040or060 == 0)					\
+	if (CPU_IS_020_OR_030)					\
 	       __asm__ __volatile__ ("movec %%cacr,%%d0\n\t"		\
 				     "orw %0,%%d0\n\t"			\
 				     "movec %%d0,%%cacr"		\
@@ -574,7 +620,11 @@ extern void cache_push_v (unsigned long vaddr, int len);
 
 extern inline void flush_cache_mm(struct mm_struct *mm)
 {
+#if FLUSH_VIRTUAL_CACHE_040
 	if (mm == current->mm) __flush_cache_all();
+#else
+	if (mm == current->mm) __flush_cache_030();
+#endif
 }
 
 extern inline void flush_cache_range(struct mm_struct *mm,
@@ -582,9 +632,11 @@ extern inline void flush_cache_range(struct mm_struct *mm,
 				     unsigned long end)
 {
 	if (mm == current->mm){
-	    if (m68k_is040or060)
+#if FLUSH_VIRTUAL_CACHE_040
+	    if (CPU_IS_040_OR_060)
 	        cache_push_v(start, end-start);
 	    else
+#endif
 	        __flush_cache_030();
 	}
 }
@@ -593,9 +645,11 @@ extern inline void flush_cache_page(struct vm_area_struct *vma,
 				    unsigned long vmaddr)
 {
 	if (vma->vm_mm == current->mm){
-	    if (m68k_is040or060)
+#if FLUSH_VIRTUAL_CACHE_040
+	    if (CPU_IS_040_OR_060)
 	        cache_push_v(vmaddr, PAGE_SIZE);
 	    else
+#endif
 	        __flush_cache_030();
 	}
 }
@@ -603,7 +657,7 @@ extern inline void flush_cache_page(struct vm_area_struct *vma,
 /* Push the page at kernel virtual address and clear the icache */
 extern inline void flush_page_to_ram (unsigned long address)
 {
-    if (m68k_is040or060) {
+    if (CPU_IS_040_OR_060) {
 	register unsigned long tmp __asm ("a0") = VTOP(address);
 	__asm__ __volatile__ ("nop\n\t"
 			      ".word 0xf470 /* cpushp %%dc,(%0) */\n\t"
@@ -620,7 +674,7 @@ extern inline void flush_page_to_ram (unsigned long address)
 /* Push n pages at kernel virtual address and clear the icache */
 extern inline void flush_pages_to_ram (unsigned long address, int n)
 {
-    if (m68k_is040or060) {
+    if (CPU_IS_040_OR_060) {
 	while (n--) {
 	    register unsigned long tmp __asm ("a0") = VTOP(address);
 	    __asm__ __volatile__ ("nop\n\t"
@@ -674,6 +728,8 @@ extern inline void update_mmu_cache(struct vm_area_struct * vma,
  * I don't know what is going on here, but since these were changed,
  * swapping hasn't been working on the 68040.
  */
+/* With the new handling of PAGE_NONE the old definitions definitely
+   don't work any more.  */
 
 #define SWP_TYPE(entry)  (((entry) >> 2) & 0x7f)
 #if 0

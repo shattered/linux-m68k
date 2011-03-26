@@ -25,6 +25,10 @@
 #include <asm/segment.h>
 #include <asm/bitops.h>
 
+#if defined(__mc68000__) /* Needed because of mach_mksound */
+#include <asm/machdep.h>
+#endif
+
 #include "kbd_kern.h"
 #include "vt_kern.h"
 #include "diacr.h"
@@ -50,6 +54,11 @@ extern struct tty_driver console_driver;
  */
 
 struct vt_struct *vt_cons[MAX_NR_CONSOLES];
+
+/* Keyboard type: Default is KB_101, but can be set be machine
+ * specific code.
+ */
+unsigned char mach_keyboard_type = KB_101;
 
 #ifndef __alpha__
 asmlinkage int sys_ioperm(unsigned long from, unsigned long num, int on);
@@ -148,6 +157,7 @@ kd_size_changed(int row, int col)
  * We also return immediately, which is what was implied within the X
  * comments - KDMKTONE doesn't put the process to sleep.
  */
+#if !defined (__mc68000__)
 
 static unsigned int mksound_lock = 0;
 
@@ -198,7 +208,20 @@ _kd_mksound(unsigned int hz, unsigned int ticks)
 }
 
 void (*kd_mksound)(unsigned int hz, unsigned int ticks) = _kd_mksound;
-	
+
+#else /* __mc68000__ */
+void dummy_mksound(unsigned int say, unsigned int nothing)
+{
+  /* We are real quiet in here ;-) */
+}
+
+/*
+ * Since this is machine-dependent, systems with a sound-device should
+ * change this value in arch/m68k/{amiga,atari,x}/config.c.
+ */
+void (*kd_mksound)(unsigned int hz, unsigned int ticks) = dummy_mksound;
+#endif
+
 /*
  * We handle the console-specific ioctl's here.  We allow the
  * capability to modify any console, not just the fg_console. 
@@ -258,8 +281,70 @@ int vt_ioctl(struct tty_struct *tty, struct file * file,
 		 */
 		i = verify_area(VERIFY_WRITE, (void *) arg, sizeof(unsigned char));
 		if (!i)
-			put_user(KB_101, (char *) arg);
+			put_user(mach_keyboard_type, (char *) arg);
 		return i;
+
+#ifdef __mc68000__
+	/* Linux/68k interface to the hardware clock */
+		
+	case KDGHWCLK:
+	{
+		struct hwclk_time time;
+
+		i = verify_area( VERIFY_WRITE, (void *)arg,
+						 sizeof(struct hwclk_time) );
+		if (i)
+			return( i );
+		if (!mach_hwclk)
+			return( -EINVAL );
+		if ((i = mach_hwclk( 0, &time )))
+			return( i );
+		memcpy_tofs( (void *)arg, &time, sizeof(struct hwclk_time) );
+		return( 0 );
+	}
+
+	case KDSHWCLK:
+	{
+		struct hwclk_time time;
+
+		if (!suser()) return( -EPERM );
+		i = verify_area( VERIFY_READ, (void *)arg,
+						 sizeof(struct hwclk_time) );
+		if (i) return( i );
+		memcpy_fromfs( &time, (void *)arg, sizeof(struct hwclk_time) );
+
+		/* simple checking... (mach_hwclk may do more) */
+		if (!mach_hwclk ||
+			time.sec  > 59 ||
+			time.min  > 59 ||
+			time.hour > 23 ||
+			time.day  < 1  || time.day  > 31 ||
+			time.mon  > 11 ||
+			time.wday < -1 || time.wday > 6  ||
+			time.year < 70)
+			return( -EINVAL );
+		return( mach_hwclk( 1, &time ) );
+	}
+
+	/* Linux/68k interface for setting the keyboard delay/repeat rate */
+		
+	case KDKBDREP:
+	{
+		struct kbd_repeat kbrep;
+		
+		if (!mach_kbdrate) return( -EINVAL );
+		if (!suser()) return( -EPERM );
+
+		i = verify_area( VERIFY_WRITE, (void *)arg,
+						 sizeof(struct kbd_repeat) );
+		if (i) return( i );
+
+		memcpy_fromfs( &kbrep, (void *)arg, sizeof(struct kbd_repeat) );
+		if ((i = mach_kbdrate( &kbrep ))) return( i );
+		memcpy_tofs( (void *)arg, &kbrep, sizeof(struct kbd_repeat) );
+		return( 0 );
+	}
+#endif
 
 #ifndef __alpha__
 		/*
@@ -482,9 +567,12 @@ int vt_ioctl(struct tty_struct *tty, struct file * file,
 		    if (kbd->kbdmode != VC_UNICODE)
 			return -EINVAL;
 
+#ifndef __mc68000__
 		/* assignment to entry 0 only tests validity of args */
+		/* ++Geert: on m68k 0x00 is a valid keycode */
 		if (!i)
 			return 0;
+#endif /* __mc68000__ */
 
 		if (!(key_map = key_maps[s])) {
 			int j;

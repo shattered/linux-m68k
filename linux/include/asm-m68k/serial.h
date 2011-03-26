@@ -28,7 +28,8 @@
 #define	SER_AMIGA	105	/* Amiga built-in serial port */
 #define SER_IOEXT	106	/* Amiga GVP IO-Extender (16c552) */
 #define SER_MFC_III	107	/* Amiga BSC Multiface Card III (MC68681) */
-
+#define SER_WHIPPET	108	/* Amiga Hisoft Whippet PCMCIA (16c550B) */
+#define SER_ASDG        109     /* Amiga ASDG DSB (Z8530 SCC) */
 
 struct serial_struct {
 	int	type;
@@ -354,7 +355,7 @@ static __inline__ void rs_check_cts( struct async_struct *info, int cts )
 	info->icount.cts++;
 	wake_up_interruptible(&info->delta_msr_wait);
 	
-	if ((info->flags & ASYNC_CTS_FLOW) && info->tty)
+	if ((info->flags & ASYNC_CTS_FLOW) && info->tty) {
 		if (info->tty->hw_stopped) {
 			if (cts) {
 #if (defined(SERIAL_DEBUG_INTR) || defined(SERIAL_DEBUG_FLOW))
@@ -371,7 +372,7 @@ static __inline__ void rs_check_cts( struct async_struct *info, int cts )
 				rs_stop( info->tty );
 			}
 		}
-		
+	}
 }
 
 

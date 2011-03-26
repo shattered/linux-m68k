@@ -188,6 +188,9 @@ static inline int unuse_pte(struct vm_area_struct * vma, unsigned long address,
 	if (SWP_TYPE(pte_val(pte)) != type)
 		return 0;
 	read_swap_page(pte_val(pte), (char *) page);
+#if 0 /* Is this really needed here, hasn't it been solved elsewhere? */
+	flush_page_to_ram(page);
+#endif
 	if (pte_val(*dir) != pte_val(pte)) {
 		free_page(page);
 		return 1;

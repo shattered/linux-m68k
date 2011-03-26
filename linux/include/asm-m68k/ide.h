@@ -19,45 +19,24 @@
 #include <asm/atari_stdma.h>
 #endif /* CONFIG_ATARI */
 
-#include <asm/bootinfo.h>
+#include <asm/setup.h>
 
-struct hd_regs_struct {
-  unsigned int hd_error,
-  hd_nsector,
-  hd_sector,
-  hd_lcyl,
-  hd_hcyl,
-  hd_select,
-  hd_status;
-};
+typedef unsigned char * ide_ioreg_t;
 
-static struct hd_regs_struct hd_regs;
-static void probe_m68k_ide (void);
+#define IDE_MEM_MAPPED_IO
 
-/* Undefine these again, they were defined for the PC. */
-#undef IDE_ERROR_OFFSET
-#undef IDE_NSECTOR_OFFSET
-#undef IDE_SECTOR_OFFSET
-#undef IDE_LCYL_OFFSET
-#undef IDE_HCYL_OFFSET
-#undef IDE_SELECT_OFFSET
-#undef IDE_STATUS_OFFSET
-#undef IDE_FEATURE_OFFSET
-#undef IDE_COMMAND_OFFSET
-#undef SELECT_DRIVE
-
-#define IDE_ERROR_OFFSET	hd_regs.hd_error
-#define IDE_NSECTOR_OFFSET	hd_regs.hd_nsector
-#define IDE_SECTOR_OFFSET	hd_regs.hd_sector
-#define IDE_LCYL_OFFSET		hd_regs.hd_lcyl
-#define IDE_HCYL_OFFSET		hd_regs.hd_hcyl
-#define IDE_SELECT_OFFSET	hd_regs.hd_select
-#define IDE_STATUS_OFFSET	hd_regs.hd_status
-#define IDE_FEATURE_OFFSET	IDE_ERROR_OFFSET
-#define IDE_COMMAND_OFFSET	IDE_STATUS_OFFSET
+#ifndef MAX_HWIFS
+#ifdef CONFIG_AMIGA
+#define MAX_HWIFS	4
+#else
+#define MAX_HWIFS	1
+#endif
+#endif
 
 #undef SUPPORT_VLB_SYNC
 #define SUPPORT_VLB_SYNC 0
+#undef SUPPORT_SLOW_DATA_PORTS
+#define SUPPORT_SLOW_DATA_PORTS 0
 
 #undef HD_DATA
 #define HD_DATA NULL
@@ -87,13 +66,11 @@ static void probe_m68k_ide (void);
 #define	STI()	sti()
 #endif
 
-#define SELECT_DRIVE(hwif,drive)  OUT_BYTE((drive)->select.all, hwif->io_base+IDE_SELECT_OFFSET);
-
-#define insl(data_reg, buffer, wcount) insw(data_reg, buffer, wcount<<1)
-#define outsl(data_reg, buffer, wcount) outsw(data_reg, buffer, wcount<<1)
+#define insl(data_reg, buffer, wcount) insw(data_reg, buffer, (wcount)<<1)
+#define outsl(data_reg, buffer, wcount) outsw(data_reg, buffer, (wcount)<<1)
 
 #define insw(port, buf, nr) \
-    if (nr % 16) \
+    if ((nr) % 16) \
 	__asm__ __volatile__ \
 	       ("movel %0,%/a0; \
 		 movel %1,%/a1; \
@@ -128,10 +105,10 @@ static void probe_m68k_ide (void);
 		 movew %/a0@,%/a1@+; \
 		 dbra %/d6,1b" : \
 		: "g" (port), "g" (buf), "g" (nr) \
-		: "a0", "a1", "d6");
+		: "a0", "a1", "d6")
 
 #define outsw(port, buf, nr) \
-    if (nr % 16) \
+    if ((nr) % 16) \
 	__asm__ __volatile__ \
 	       ("movel %0,%/a0; \
 		 movel %1,%/a1; \
@@ -166,7 +143,110 @@ static void probe_m68k_ide (void);
 		 movew %/a1@+,%/a0@; \
 		 dbra %/d6,1b" : \
 		: "g" (port), "g" (buf), "g" (nr) \
-		: "a0", "a1", "d6");
+		: "a0", "a1", "d6")
+
+#ifdef CONFIG_ATARI
+#define insl_swapw(data_reg, buffer, wcount) \
+    insw_swapw(data_reg, buffer, (wcount)<<1)
+#define outsl_swapw(data_reg, buffer, wcount) \
+    outsw_swapw(data_reg, buffer, (wcount)<<1)
+
+#define insw_swapw(port, buf, nr) \
+    if ((nr) % 8) \
+	__asm__ __volatile__ \
+	       ("movel %0,%/a0; \
+		 movel %1,%/a1; \
+		 movel %2,%/d6; \
+		 subql #1,%/d6; \
+	       1:movew %/a0@,%/d0; \
+		 rolw  #8,%/d0; \
+		 movew %/d0,%/a1@+; \
+		 dbra %/d6,1b" : \
+		: "g" (port), "g" (buf), "g" (nr) \
+		: "d0", "a0", "a1", "d6"); \
+    else \
+	__asm__ __volatile__ \
+	       ("movel %0,%/a0; \
+		 movel %1,%/a1; \
+		 movel %2,%/d6; \
+		 lsrl  #3,%/d6; \
+		 subql #1,%/d6; \
+	       1:movew %/a0@,%/d0; \
+		 rolw  #8,%/d0; \
+		 movew %/d0,%/a1@+; \
+		 movew %/a0@,%/d0; \
+		 rolw  #8,%/d0; \
+		 movew %/d0,%/a1@+; \
+		 movew %/a0@,%/d0; \
+		 rolw  #8,%/d0; \
+		 movew %/d0,%/a1@+; \
+		 movew %/a0@,%/d0; \
+		 rolw  #8,%/d0; \
+		 movew %/d0,%/a1@+; \
+		 movew %/a0@,%/d0; \
+		 rolw  #8,%/d0; \
+		 movew %/d0,%/a1@+; \
+		 movew %/a0@,%/d0; \
+		 rolw  #8,%/d0; \
+		 movew %/d0,%/a1@+; \
+		 movew %/a0@,%/d0; \
+		 rolw  #8,%/d0; \
+		 movew %/d0,%/a1@+; \
+		 movew %/a0@,%/d0; \
+		 rolw  #8,%/d0; \
+		 movew %/d0,%/a1@+; \
+		 dbra %/d6,1b" : \
+		: "g" (port), "g" (buf), "g" (nr) \
+		: "d0", "a0", "a1", "d6")
+
+#define outsw_swapw(port, buf, nr) \
+    if ((nr) % 8) \
+	__asm__ __volatile__ \
+	       ("movel %0,%/a0; \
+		 movel %1,%/a1; \
+		 movel %2,%/d6; \
+		 subql #1,%/d6; \
+	       1:movew %/a1@+,%/d0; \
+		 rolw  #8,%/d0; \
+		 movew %/d0,%/a0@; \
+		 dbra %/d6,1b" : \
+		: "g" (port), "g" (buf), "g" (nr) \
+		: "d0", "a0", "a1", "d6"); \
+    else \
+	__asm__ __volatile__ \
+	       ("movel %0,%/a0; \
+		 movel %1,%/a1; \
+		 movel %2,%/d6; \
+		 lsrl  #3,%/d6; \
+		 subql #1,%/d6; \
+	       1:movew %/a1@+,%/d0; \
+		 rolw  #8,%/d0; \
+		 movew %/d0,%/a0@; \
+		 movew %/a1@+,%/d0; \
+		 rolw  #8,%/d0; \
+		 movew %/d0,%/a0@; \
+		 movew %/a1@+,%/d0; \
+		 rolw  #8,%/d0; \
+		 movew %/d0,%/a0@; \
+		 movew %/a1@+,%/d0; \
+		 rolw  #8,%/d0; \
+		 movew %/d0,%/a0@; \
+		 movew %/a1@+,%/d0; \
+		 rolw  #8,%/d0; \
+		 movew %/d0,%/a0@; \
+		 movew %/a1@+,%/d0; \
+		 rolw  #8,%/d0; \
+		 movew %/d0,%/a0@; \
+		 movew %/a1@+,%/d0; \
+		 rolw  #8,%/d0; \
+		 movew %/d0,%/a0@; \
+		 movew %/a1@+,%/d0; \
+		 rolw  #8,%/d0; \
+		 movew %/d0,%/a0@; \
+		 dbra %/d6,1b" : \
+		: "g" (port), "g" (buf), "g" (nr) \
+		: "d0", "a0", "a1", "d6")
+#endif /* CONFIG_ATARI */
 
 #define T_CHAR          (0x0000)        /* char:  don't touch  */
 #define T_SHORT         (0x4000)        /* short: 12 -> 21     */

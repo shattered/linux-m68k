@@ -76,14 +76,17 @@ static int read_inode_bitmap (struct super_block * sb,
 	struct ext2_group_desc * gdp;
 	struct buffer_head * bh;
 	int retval = 0;
+	int bs = BYTE_SWAP(sb->u.ext2_sb.s_byte_swapped);
 
 	gdp = get_group_desc (sb, block_group, NULL);
-	bh = bread (sb->s_dev, gdp->bg_inode_bitmap, sb->s_blocksize);
+	bh = bread (sb->s_dev, e_swab (bs, gdp->bg_inode_bitmap),
+		    sb->s_blocksize);
 	if (!bh) {
 		ext2_error (sb, "read_inode_bitmap",
 			    "Cannot read inode bitmap - "
 			    "block_group = %lu, inode_bitmap = %lu",
-			    block_group, (unsigned long) gdp->bg_inode_bitmap);
+			    block_group,
+			    (unsigned long) e_swab (bs, gdp->bg_inode_bitmap));
 		retval = -EIO;
 	}
 	/*
@@ -186,6 +189,7 @@ void ext2_free_inode (struct inode * inode)
 	unsigned long block_group;
 	unsigned long bit;
 	int bitmap_nr;
+	int bs;
 	struct ext2_group_desc * gdp;
 	struct ext2_super_block * es;
 
@@ -230,8 +234,9 @@ void ext2_free_inode (struct inode * inode)
 	}
 
 	lock_super (sb);
+	bs = BYTE_SWAP(inode->i_sb->u.ext2_sb.s_byte_swapped);
 	if (inode->i_ino < EXT2_FIRST_INO(sb) ||
-	    inode->i_ino > sb->u.ext2_sb.s_es->s_inodes_count) {
+	    inode->i_ino > e_swab (bs, sb->u.ext2_sb.s_es->s_inodes_count)) {
 		ext2_error (sb, "free_inode",
 			    "reserved inode or nonexistent inode");
 		unlock_super (sb);
@@ -247,16 +252,19 @@ void ext2_free_inode (struct inode * inode)
 	}
 	
 	bh = sb->u.ext2_sb.s_inode_bitmap[bitmap_nr];
-	if (!clear_bit (bit, bh->b_data))
+	if (!ext2_clear_bit (bit, bh->b_data))
 		ext2_warning (sb, "ext2_free_inode",
 			      "bit already cleared for inode %lu", inode->i_ino);
 	else {
 		gdp = get_group_desc (sb, block_group, &bh2);
-		gdp->bg_free_inodes_count++;
+		e_set_swab (bs, gdp->bg_free_inodes_count,
+			    e_swab (bs, gdp->bg_free_inodes_count) + 1);
 		if (S_ISDIR(inode->i_mode))
-			gdp->bg_used_dirs_count--;
+			e_set_swab (bs, gdp->bg_used_dirs_count,
+				    e_swab (bs, gdp->bg_used_dirs_count) - 1);
 		mark_buffer_dirty(bh2, 1);
-		es->s_free_inodes_count++;
+		e_set_swab (bs, es->s_free_inodes_count,
+			    e_swab (bs, es->s_free_inodes_count) + 1);
 		mark_buffer_dirty(sb->u.ext2_sb.s_sbh, 1);
 		inode->i_dirt = 0;
 	}
@@ -303,6 +311,7 @@ struct inode * ext2_new_inode (const struct inode * dir, int mode, int * err)
 	int i, j, avefreei;
 	struct inode * inode;
 	int bitmap_nr;
+	int bs;
 	struct ext2_group_desc * gdp;
 	struct ext2_group_desc * tmp;
 	struct ext2_super_block * es;
@@ -316,20 +325,21 @@ struct inode * ext2_new_inode (const struct inode * dir, int mode, int * err)
 	inode->i_sb = sb;
 	inode->i_flags = sb->s_flags;
 	lock_super (sb);
+	bs = BYTE_SWAP(sb->u.ext2_sb.s_byte_swapped);
 	es = sb->u.ext2_sb.s_es;
 repeat:
 	gdp = NULL; i=0;
 	
 	*err = -ENOSPC;
 	if (S_ISDIR(mode)) {
-		avefreei = es->s_free_inodes_count /
+		avefreei = e_swab (bs, es->s_free_inodes_count) /
 			sb->u.ext2_sb.s_groups_count;
 /* I am not yet convinced that this next bit is necessary.
 		i = dir->u.ext2_i.i_block_group;
 		for (j = 0; j < sb->u.ext2_sb.s_groups_count; j++) {
 			tmp = get_group_desc (sb, i, &bh2);
-			if ((tmp->bg_used_dirs_count << 8) < 
-			    tmp->bg_free_inodes_count) {
+			if ((e_swab (bs, tmp->bg_used_dirs_count) << 8) < 
+			    e_swab (bs, tmp->bg_free_inodes_count)) {
 				gdp = tmp;
 				break;
 			}
@@ -340,11 +350,11 @@ repeat:
 		if (!gdp) {
 			for (j = 0; j < sb->u.ext2_sb.s_groups_count; j++) {
 				tmp = get_group_desc (sb, j, &bh2);
-				if (tmp->bg_free_inodes_count &&
-					tmp->bg_free_inodes_count >= avefreei) {
+				if (e_swab (bs, tmp->bg_free_inodes_count) &&
+					e_swab (bs, tmp->bg_free_inodes_count) >= avefreei) {
 					if (!gdp || 
-					    (tmp->bg_free_blocks_count >
-					     gdp->bg_free_blocks_count)) {
+					    (e_swab (bs, tmp->bg_free_blocks_count) >
+					     e_swab (bs, gdp->bg_free_blocks_count))) {
 						i = j;
 						gdp = tmp;
 					}
@@ -409,10 +419,10 @@ repeat:
 	}
 	
 	bh = sb->u.ext2_sb.s_inode_bitmap[bitmap_nr];
-	if ((j = find_first_zero_bit ((unsigned long *) bh->b_data,
+	if ((j = ext2_find_first_zero_bit ((unsigned long *) bh->b_data,
 				      EXT2_INODES_PER_GROUP(sb))) <
 	    EXT2_INODES_PER_GROUP(sb)) {
-		if (set_bit (j, bh->b_data)) {
+		if (ext2_set_bit (j, bh->b_data)) {
 			ext2_warning (sb, "ext2_new_inode",
 				      "bit already set for inode %d", j);
 			goto repeat;
@@ -434,7 +444,7 @@ repeat:
 		goto repeat;
 	}
 	j += i * EXT2_INODES_PER_GROUP(sb) + 1;
-	if (j < EXT2_FIRST_INO(sb) || j > es->s_inodes_count) {
+	if (j < EXT2_FIRST_INO(sb) || j > e_swab (bs, es->s_inodes_count)) {
 		ext2_error (sb, "ext2_new_inode",
 			    "reserved inode or inode > inodes count - "
 			    "block_group = %d,inode=%d", i, j);
@@ -442,11 +452,14 @@ repeat:
 		iput (inode);
 		return NULL;
 	}
-	gdp->bg_free_inodes_count--;
+	e_set_swab (bs, gdp->bg_free_inodes_count,
+		    e_swab (bs, gdp->bg_free_inodes_count) - 1);
 	if (S_ISDIR(mode))
-		gdp->bg_used_dirs_count++;
+		e_set_swab (bs, gdp->bg_used_dirs_count,
+			    e_swab (bs, gdp->bg_used_dirs_count) + 1);
 	mark_buffer_dirty(bh2, 1);
-	es->s_free_inodes_count--;
+	e_set_swab (bs, es->s_free_inodes_count,
+		    e_swab (bs, es->s_free_inodes_count) - 1);
 	mark_buffer_dirty(sb->u.ext2_sb.s_sbh, 1);
 	sb->s_dirt = 1;
 	inode->i_mode = mode;
@@ -510,16 +523,17 @@ unsigned long ext2_count_free_inodes (struct super_block * sb)
 	unsigned long desc_count, bitmap_count, x;
 	int bitmap_nr;
 	struct ext2_group_desc * gdp;
-	int i;
+	int i, bs;
 
 	lock_super (sb);
 	es = sb->u.ext2_sb.s_es;
+	bs = BYTE_SWAP(sb->u.ext2_sb.s_byte_swapped);
 	desc_count = 0;
 	bitmap_count = 0;
 	gdp = NULL;
 	for (i = 0; i < sb->u.ext2_sb.s_groups_count; i++) {
 		gdp = get_group_desc (sb, i, NULL);
-		desc_count += gdp->bg_free_inodes_count;
+		desc_count += e_swab (bs, gdp->bg_free_inodes_count);
 		bitmap_nr = load_inode_bitmap (sb, i);
 		if (bitmap_nr < 0)
 			continue;
@@ -527,15 +541,16 @@ unsigned long ext2_count_free_inodes (struct super_block * sb)
 		x = ext2_count_free (sb->u.ext2_sb.s_inode_bitmap[bitmap_nr],
 				     EXT2_INODES_PER_GROUP(sb) / 8);
 		printk ("group %d: stored = %d, counted = %lu\n",
-			i, gdp->bg_free_inodes_count, x);
+			i, e_swab (bs, gdp->bg_free_inodes_count), x);
 		bitmap_count += x;
 	}
 	printk("ext2_count_free_inodes: stored = %lu, computed = %lu, %lu\n",
-		es->s_free_inodes_count, desc_count, bitmap_count);
+		e_swab (bs, es->s_free_inodes_count), desc_count, bitmap_count);
 	unlock_super (sb);
 	return desc_count;
 #else
-	return sb->u.ext2_sb.s_es->s_free_inodes_count;
+	return e_swab (BYTE_SWAP(sb->u.ext2_sb.s_byte_swapped),
+		       sb->u.ext2_sb.s_es->s_free_inodes_count);
 #endif
 }
 
@@ -545,33 +560,35 @@ void ext2_check_inodes_bitmap (struct super_block * sb)
 	unsigned long desc_count, bitmap_count, x;
 	int bitmap_nr;
 	struct ext2_group_desc * gdp;
-	int i;
+	int i, bs;
 
 	lock_super (sb);
+	bs = BYTE_SWAP(sb->u.ext2_sb.s_byte_swapped);
 	es = sb->u.ext2_sb.s_es;
 	desc_count = 0;
 	bitmap_count = 0;
 	gdp = NULL;
 	for (i = 0; i < sb->u.ext2_sb.s_groups_count; i++) {
 		gdp = get_group_desc (sb, i, NULL);
-		desc_count += gdp->bg_free_inodes_count;
+		desc_count += e_swab (bs, gdp->bg_free_inodes_count);
 		bitmap_nr = load_inode_bitmap (sb, i);
 		if (bitmap_nr < 0)
 			continue;
 		
 		x = ext2_count_free (sb->u.ext2_sb.s_inode_bitmap[bitmap_nr],
 				     EXT2_INODES_PER_GROUP(sb) / 8);
-		if (gdp->bg_free_inodes_count != x)
+		if (e_swab (bs, gdp->bg_free_inodes_count) != x)
 			ext2_error (sb, "ext2_check_inodes_bitmap",
 				    "Wrong free inodes count in group %d, "
 				    "stored = %d, counted = %lu", i,
-				    gdp->bg_free_inodes_count, x);
+				    e_swab (bs, gdp->bg_free_inodes_count), x);
 		bitmap_count += x;
 	}
-	if (es->s_free_inodes_count != bitmap_count)
+	if (e_swab (bs, es->s_free_inodes_count) != bitmap_count)
 		ext2_error (sb, "ext2_check_inodes_bitmap",
 			    "Wrong free inodes count in super block, "
 			    "stored = %lu, counted = %lu",
-			    (unsigned long) es->s_free_inodes_count, bitmap_count);
+			    (unsigned long) e_swab (bs, es->s_free_inodes_count),
+			    bitmap_count);
 	unlock_super (sb);
 }

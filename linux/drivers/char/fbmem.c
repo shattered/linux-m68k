@@ -17,8 +17,8 @@
 #include <linux/mman.h>
 #include <linux/tty.h>
 
+#include <asm/setup.h>
 #include <asm/segment.h>
-#include <asm/bootinfo.h>
 #include <asm/page.h>
 #include <asm/pgtable.h>
 
@@ -63,14 +63,15 @@ fb_read(struct inode *inode, struct file *file, char *buf, int count)
 	struct fb_fix_screeninfo fix;
 	char *base_addr;
 	int copy_size;
+	int fbidx=GET_FB_IDX(inode->i_rdev);
 
 	if (! fb)
 		return -ENODEV;
 	if (count < 0)
 		return -EINVAL;
 
-	fb->fb_get_fix(&fix,PROC_CONSOLE());
-	base_addr=(char *) fix.smem_start;
+	fb->fb_get_fix(&fix,PROC_CONSOLE(), fbidx);
+	base_addr=fix.smem_start;
 	copy_size=(count + p <= fix.smem_len ? count : fix.smem_len - p);
 	memcpy_tofs(buf, base_addr+p, copy_size);
 	file->f_pos += copy_size;
@@ -85,13 +86,14 @@ fb_write(struct inode *inode, struct file *file, const char *buf, int count)
 	struct fb_fix_screeninfo fix;
 	char *base_addr;
 	int copy_size;
+	int fbidx=GET_FB_IDX(inode->i_rdev);
 
 	if (! fb)
 		return -ENODEV;
 	if (count < 0)
 		return -EINVAL;
-	fb->fb_get_fix(&fix, PROC_CONSOLE());
-	base_addr=(char *) fix.smem_start;
+	fb->fb_get_fix(&fix, PROC_CONSOLE(), fbidx);
+	base_addr=fix.smem_start;
 	copy_size=(count + p <= fix.smem_len ? count : fix.smem_len - p);
 	memcpy_fromfs(base_addr+p, buf, copy_size); 
 	file->f_pos += copy_size;
@@ -107,6 +109,7 @@ fb_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
 	struct fb_cmap cmap;
 	struct fb_var_screeninfo var;
 	struct fb_fix_screeninfo fix;
+	struct fb_monitorspec mon;
 
 	int i,fbidx,vidx;
 	
@@ -120,7 +123,7 @@ fb_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
 		fbidx=GET_FB_IDX(inode->i_rdev);
 		vidx=GET_FB_VAR_IDX(inode->i_rdev);
 		if (! vidx) /* ask device driver for current */
-			i=fb->fb_get_var(&var, PROC_CONSOLE());
+			i=fb->fb_get_var(&var, PROC_CONSOLE(), fbidx);
 		else
 			var=registered_fb_var[fbidx][vidx-1];
 		memcpy_tofs((void *) arg, &var, sizeof(var));
@@ -130,9 +133,9 @@ fb_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
 				sizeof(struct fb_var_screeninfo));
 		if (i) return i;
 		memcpy_fromfs(&var, (void *) arg, sizeof(var));
-		i=fb->fb_set_var(&var, PROC_CONSOLE());
-		memcpy_tofs((void *) arg, &var, sizeof(var));
 		fbidx=GET_FB_IDX(inode->i_rdev);
+		i=fb->fb_set_var(&var, PROC_CONSOLE(), fbidx);
+		memcpy_tofs((void *) arg, &var, sizeof(var));
 		vidx=GET_FB_VAR_IDX(inode->i_rdev);
 		if (! i && vidx)
 			registered_fb_var[fbidx][vidx-1]=var;
@@ -141,7 +144,8 @@ fb_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
 		i = verify_area(VERIFY_WRITE, (void *) arg, 
 				sizeof(struct fb_fix_screeninfo));
 		if (i)	return i;
-		i=fb->fb_get_fix(&fix, PROC_CONSOLE());
+		fbidx=GET_FB_IDX(inode->i_rdev);
+		i=fb->fb_get_fix(&fix, PROC_CONSOLE(), fbidx);
 		memcpy_tofs((void *) arg, &fix, sizeof(fix));
 		return i;
 	case FBIOPUTCMAP:
@@ -163,7 +167,8 @@ fb_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
 					cmap.len * sizeof(unsigned short));
 			if (i) return i;
 		}
-		return (fb->fb_set_cmap(&cmap, 0, PROC_CONSOLE()));
+		fbidx=GET_FB_IDX(inode->i_rdev);
+		return (fb->fb_set_cmap(&cmap, 0, PROC_CONSOLE(), fbidx));
 	case FBIOGETCMAP:
 		i = verify_area(VERIFY_READ, (void *) arg,
 				sizeof(struct fb_cmap));
@@ -183,21 +188,40 @@ fb_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
 					cmap.len * sizeof(unsigned short));
 			if (i) return i;
 		}
-		return (fb->fb_get_cmap(&cmap, 0, PROC_CONSOLE()));
+		fbidx=GET_FB_IDX(inode->i_rdev);
+		return (fb->fb_get_cmap(&cmap, 0, PROC_CONSOLE(), fbidx));
 	case FBIOPAN_DISPLAY:
 		i = verify_area(VERIFY_WRITE, (void *) arg, 
 				sizeof(struct fb_var_screeninfo));
 		if (i) return i;
 		memcpy_fromfs(&var, (void *) arg, sizeof(var));
-		i=fb->fb_pan_display(&var, PROC_CONSOLE());
-		memcpy_tofs((void *) arg, &var, sizeof(var));
 		fbidx=GET_FB_IDX(inode->i_rdev);
+		i=fb->fb_pan_display(&var, PROC_CONSOLE(), fbidx);
+		memcpy_tofs((void *) arg, &var, sizeof(var));
 		vidx=GET_FB_VAR_IDX(inode->i_rdev);
 		if (! i && vidx)
 			registered_fb_var[fbidx][vidx-1]=var;
 		return i;
+	case FBIOGET_MONITORSPEC:
+		i = verify_area(VERIFY_WRITE, (void *) arg,
+			sizeof(struct fb_monitorspec));
+		if (i) return i;
+		fbidx=GET_FB_IDX(inode->i_rdev);
+		i = fb->fb_get_monitorspec(&mon, PROC_CONSOLE(), fbidx);
+		memcpy_tofs((void *) arg, &mon, sizeof(mon));
+		return i;
+	case FBIOPUT_MONITORSPEC:
+		if (!suser()) return( -EPERM );
+		i = verify_area(VERIFY_READ, (void *) arg,
+			sizeof(struct fb_monitorspec));
+		if (i) return i;
+		fbidx=GET_FB_IDX(inode->i_rdev);
+		memcpy_fromfs(&mon, (void *)arg, sizeof(mon));
+		i = fb->fb_put_monitorspec(&mon, PROC_CONSOLE(), fbidx);
+		return i;
 	default:
-		return (fb->fb_ioctl(inode, file, cmd, arg, PROC_CONSOLE()));
+		fbidx=GET_FB_IDX(inode->i_rdev);
+		return (fb->fb_ioctl(inode, file, cmd, arg, PROC_CONSOLE(), fbidx));
 	}
 }
 
@@ -206,20 +230,36 @@ fb_mmap(struct inode *inode, struct file *file, struct vm_area_struct * vma)
 {
 	struct fb_ops *fb = registered_fb[GET_FB_IDX(inode->i_rdev)];
 	struct fb_fix_screeninfo fix;
+	int fbidx = GET_FB_IDX(inode->i_rdev);
+	unsigned char *start;
+	unsigned long len;
 
 	if (! fb)
 		return -ENODEV;
-	fb->fb_get_fix(&fix, PROC_CONSOLE());
-	if ((vma->vm_end - vma->vm_start + vma->vm_offset) > fix.smem_len)
-		return -EINVAL;
-	vma->vm_offset += fix.smem_start;
-	if (vma->vm_offset & ~PAGE_MASK)
-		return -ENXIO;
-	if (m68k_is040or060) {
-		pgprot_val(vma->vm_page_prot) &= _CACHEMASK040;
-		/* Use write-through cache mode */
-		pgprot_val(vma->vm_page_prot) |= _PAGE_CACHE040W;
+
+	fb->fb_get_fix(&fix, PROC_CONSOLE(), fbidx);
+	if (vma->vm_offset < fix.smem_len) {
+		/* frame buffer memory */
+		start = fix.smem_start;
+		len = fix.smem_len;
+	} else {
+		/* memory mapped io */
+		start = fix.mmio_start;
+		len = fix.mmio_len;
+		vma->vm_offset -= fix.smem_len;
 	}
+	if ((vma->vm_end - vma->vm_start + vma->vm_offset) > len)
+                return -EINVAL;
+	vma->vm_offset += (unsigned long)start;
+        if (vma->vm_offset & ~PAGE_MASK)
+                return -ENXIO;
+	if (CPU_IS_020_OR_030)
+		pgprot_val(vma->vm_page_prot) |= _PAGE_NOCACHE030;
+        if (CPU_IS_040_OR_060) {
+                pgprot_val(vma->vm_page_prot) &= _CACHEMASK040;
+		/* Use no-cache mode, serialized */
+                pgprot_val(vma->vm_page_prot) |= _PAGE_NOCACHE_S;
+        }
 	if (remap_page_range(vma->vm_start, vma->vm_offset,
 			     vma->vm_end - vma->vm_start, vma->vm_page_prot))
 		return -EAGAIN;
@@ -243,7 +283,7 @@ fb_open(struct inode *inode, struct file *file)
 	if (fb_curr_open[fbidx] && fb_curr_open[fbidx] != vidx)
 		return -EBUSY;
  	if (file->f_mode & 2) /* only set parameters if opened writeable */
-		if ((err=fb->fb_set_var(registered_fb_var[fbidx] + vidx-1, PROC_CONSOLE())))
+		if ((err=fb->fb_set_var(registered_fb_var[fbidx] + vidx-1, PROC_CONSOLE(), fbidx)))
 			return err;
 	fb_curr_open[fbidx] = vidx;
 	fb_open_count[fbidx]++;

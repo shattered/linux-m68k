@@ -453,7 +453,7 @@ extern unsigned long ext2_count_free (struct buffer_head *, unsigned);
 /* dir.c */
 extern int ext2_check_dir_entry (const char *, struct inode *,
 				 struct ext2_dir_entry *, struct buffer_head *,
-				 unsigned long);
+				 unsigned long, int);
 
 /* file.c */
 extern int ext2_read (struct inode *, struct file *, char *, int);
@@ -529,6 +529,38 @@ extern struct inode_operations ext2_file_inode_operations;
 
 /* symlink.c */
 extern struct inode_operations ext2_symlink_inode_operations;
+
+/* byte swapping */
+#define e_swab(__doit, __val) \
+  ((__doit) ? (sizeof (__val) == 1 ? (__val) : \
+	       sizeof (__val) == 2 ? (__typeof (__val)) ext2_swab16 (__val) \
+				   : (__typeof (__val)) ext2_swab32 (__val)) \
+	    : (__val))
+#define e_set_swab(__doit, __var, __val) \
+  ((__var) = (__doit) ? (sizeof (__var) == 1 ? (__val) : \
+			 sizeof (__var) == 2 ? ext2_swab16 (__val) \
+					     : ext2_swab32 (__val)) \
+		      : (__val))
+
+extern __inline__ __u16 ext2_swab16 (__u16 val)
+{
+	return (val << 8) | (val >> 8);
+}
+
+extern __inline__ __u32 ext2_swab32 (__u32 val)
+{
+#ifdef __mc68000__
+	__asm__ ("rolw #8,%0; swap %0; rolw #8,%0" : "=d" (val) : "0" (val));
+	return val;
+#else
+	__u16 vall = val, valh = val >> 16;
+	vall = (vall << 8) | (vall >> 8);
+	valh = (valh << 8) | (valh >> 8);
+	return (vall << 16) | valh;
+#endif
+}
+
+#define BYTE_SWAP(A) A
 
 #endif	/* __KERNEL__ */
 

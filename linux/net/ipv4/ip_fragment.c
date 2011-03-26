@@ -584,7 +584,9 @@ struct sk_buff *ip_defrag(struct iphdr *iph, struct sk_buff *skb, struct device 
 	 */
 
 	tfp = NULL;
-	tfp = ip_frag_create(offset, end, skb, ptr);
+	
+	if(offset<end)
+		tfp = ip_frag_create(offset, end, skb, ptr);
 
 	/*
 	 *	No memory to save the fragment - so throw the lot. If we

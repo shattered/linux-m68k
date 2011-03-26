@@ -10,7 +10,7 @@
 #include <linux/stat.h>
 #include <linux/sched.h>
 
-static int return_EIO(void)
+static int return_EIO()
 {
 	return -EIO;
 }

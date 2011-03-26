@@ -49,6 +49,9 @@
  * Andreas 95/12/12:
  *  - increase gap size at start of track for HD/ED disks
  *
+ * Michael (MSch) 11/07/96:
+ *  - implemented FDSETPRM and FDDEFPRM ioctl
+ *
  *  Things left to do:
  *   - Formatting
  *   - Maybe a better strategy for disk change detection (does anyone
@@ -70,12 +73,12 @@
 #include <linux/mm.h>
 #include <linux/malloc.h>
 
+#include <asm/setup.h>
 #include <asm/system.h>
 #include <asm/bitops.h>
 #include <asm/irq.h>
 #include <asm/pgtable.h>
 
-#include <asm/bootinfo.h>
 #include <asm/atafd.h>
 #include <asm/atafdreg.h>
 #include <asm/atarihw.h>
@@ -192,6 +195,21 @@ static struct {
  * current disk size is unknown.
  */
 #define MAX_DISK_SIZE 3280
+
+/*
+ * MSch: User-provided type information. 'drive' points to
+ * the respective entry of this array. Set by FDSETPRM ioctls.
+ */
+static struct atari_disk_type user_params[FD_MAX_UNITS];
+
+/*
+ * User-provided permanent type information. 'drive' points to
+ * the respective entry of this array.  Set by FDDEFPRM ioctls, 
+ * restored upon disk change by floppy_revalidate() if valid (as seen by
+ * default_params[].blocks > 0 - a bit in unit[].flags might be used for this?)
+ */
+static struct atari_disk_type default_params[FD_MAX_UNITS] = {
+	{ NULL,  0, 0, 0, 0},  };
 
 static int floppy_sizes[256];
 static int floppy_blocksizes[256] = { 0, };
@@ -359,7 +377,7 @@ static void fd_motor_off_timer( unsigned long dummy );
 static void check_change( void );
 static __inline__ void set_head_settle_flag( void );
 static __inline__ int get_head_settle_flag( void );
-static void floppy_irq (int irq, struct pt_regs *fp, void *dummy);
+static void floppy_irq (int irq, void *dummy, struct pt_regs *fp);
 static void fd_error( void );
 static int do_format(kdev_t drive, struct atari_format_descr *desc);
 static void do_fd_action( int drive );
@@ -572,7 +590,7 @@ static __inline__ int get_head_settle_flag( void )
 
 static void (*FloppyIRQHandler)( int status ) = NULL;
 
-static void floppy_irq (int irq, struct pt_regs *fp, void *dummy)
+static void floppy_irq (int irq, void *dummy, struct pt_regs *fp)
 {
 	unsigned char status;
 	void (*handler)( int );
@@ -1065,9 +1083,12 @@ static void fd_rwsec_done( int status )
 	    !(read_track && FDC_READ(FDCREG_SECTOR) > SUDT->spt)) {
 		if (Probing) {
 			if (SUDT > disk_type) {
+			    if (SUDT[-1].blocks > ReqBlock) {
 				/* try another disk type */
 				SUDT--;
 				floppy_sizes[SelectedDrive] = SUDT->blocks >> 1;
+			    } else
+				Probing = 0;
 			}
 			else {
 				if (SUD.flags & FTD_MSG)
@@ -1374,10 +1395,20 @@ static int floppy_revalidate (kdev_t dev)
   if (test_bit (drive, &changed_floppies) || test_bit (drive, &fake_change)
       || unit[drive].disktype == 0)
     {
+      if (UD.flags & FTD_MSG)
+          printk (KERN_ERR "floppy: clear format %p!\n", UDT);
       BufferDrive = -1;
       clear_bit (drive, &fake_change);
       clear_bit (drive, &changed_floppies);
+      /* 
+       * MSch: clearing geometry makes sense only for autoprobe formats, 
+       * for 'permanent user-defined' parameter: restore default_params[] 
+       * here if flagged valid!
+       */
+      if (default_params[drive].blocks == 0)
       UDT = 0;
+      else
+	UDT = &default_params[drive];
     }
   return 0;
 }
@@ -1532,15 +1563,18 @@ static int fd_ioctl(struct inode *inode, struct file *filp,
 #define IOCTL_MODE_BIT 8
 #define OPEN_WRITE_BIT 16
 #define IOCTL_ALLOWED (filp && (filp->f_mode & IOCTL_MODE_BIT))
-#define COPYIN(x) (memcpy_fromfs( &(x), (void *) param, sizeof(x)))
+#define COPYIN(x)  (memcpy_fromfs( &(x), (void *) param, sizeof(x)))
+#define COPYOUT(x) (memcpy_tofs( (void *) param, &(x), sizeof(x)))
 
 	int drive, type, error;
 	kdev_t device;
 	struct atari_format_descr fmt_desc;
 	struct atari_disk_type *dtp;
 	struct floppy_struct getprm;
-
-	device = inode->i_rdev;
+	int settype;
+	struct floppy_struct setprm;
+ 
+  	device = inode->i_rdev;
 	switch (cmd) {
 		RO_IOCTLS (device, param);
 	}
@@ -1556,6 +1590,9 @@ static int fd_ioctl(struct inode *inode, struct file *filp,
 				return -ENODEV;
 			type = minor2disktype[type].index;
 			dtp = &disk_type[type];
+			if (UD.flags & FTD_MSG)
+			    printk (KERN_INFO "floppy%d: found dtp %p name %s!\n",
+			        drive, dtp, dtp->name);
 		}
 		else {
 			if (!UDT)
@@ -1563,17 +1600,21 @@ static int fd_ioctl(struct inode *inode, struct file *filp,
 			else
 				dtp = UDT;
 		}
-		error = verify_area(VERIFY_WRITE, (void *)param,
-				    sizeof(struct floppy_struct));
-		if (error)
+		error = verify_area(VERIFY_WRITE, (void *)param, sizeof(getprm));
+		if (error) {
+			printk (KERN_INFO "floppy: error on VERIFY_WRITE!\n");
 			return( error );
+		}
+
 		memset((void *)&getprm, 0, sizeof(getprm));
 		getprm.size = dtp->blocks;
 		getprm.sect = dtp->spt;
 		getprm.head = 2;
 		getprm.track = dtp->blocks/dtp->spt/2;
 		getprm.stretch = dtp->stretch;
-		memcpy_tofs((void *)param, &getprm, sizeof(struct floppy_struct));
+
+		COPYOUT( getprm ) ;
+
 		return 0;
 	}
 	if (!IOCTL_ALLOWED)
@@ -1581,7 +1622,120 @@ static int fd_ioctl(struct inode *inode, struct file *filp,
 	switch (cmd) {
 	case FDSETPRM:
 	case FDDEFPRM:
+	        /* 
+		 * MSch 7/96: simple 'set geometry' case: only set the
+		 * 'default' device params (minor == 0).
+		 * Currently, the drive geometry is cleared after each
+		 * disk change and subsequent revalidate()! -> Simple
+		 * implementation of FDDEFPRM: save geometry from a
+		 * FDDEFPRM call and restore it in floppy_revalidate() !
+		 */
+
+		if (fd_ref[drive] != 1 && fd_ref[drive] != -1)
+			return -EBUSY;
+
+		/* get the parameters from user space */
+		if ((error = verify_area(VERIFY_READ, (void *)param, sizeof(setprm)))) {
+			printk (KERN_INFO "floppy: error on VERIFY_READ!\n");			
+			return( error );
+		}
+		COPYIN( setprm );
+
+		/* 
+		 * first of all: check for floppy change and revalidate, 
+		 * or the next access will revalidate - and clear UDT :-(
+		 */
+
+		if (check_floppy_change(device))
+		        floppy_revalidate(device);
+
+		if (UD.flags & FTD_MSG)
+		    printk (KERN_INFO "floppy%d: setting size %d spt %d str %d!\n",
+			drive, setprm.size, setprm.sect, setprm.stretch);
+
+		/* type > 0: Overwrite specified entry in the disktype list? */
+		if (type) {
+		        /* refuse to re-set a predefined type for now */
+			printk (KERN_INFO "floppy: can't redefine autodetect type!\n");
+			redo_fd_request();
 		return -EINVAL;
+		}
+
+		/* 
+		 * type == 0: first look for a matching entry in the type list,
+		 * and set the UD.disktype field to use the predefined entry.
+		 * TODO: add user-defined format to head of autoprobe list ? 
+		 * Useful to include the user-type for future autodetection!
+		 */
+
+		for (settype = 0; settype < NUM_DISK_MINORS; settype++) {
+		  int setidx = 0;
+			if (minor2disktype[settype].drive_types > DriveType) {
+				/* skip this one, invalid for drive ... */
+				continue;
+			}
+			setidx = minor2disktype[settype].index;
+			dtp = &disk_type[setidx];
+
+			/* found matching entry ?? */
+			if (   dtp->blocks  == setprm.size 
+			    && dtp->spt     == setprm.sect
+			    && dtp->stretch == setprm.stretch ) {
+				if (UD.flags & FTD_MSG)
+				    printk (KERN_INFO "floppy%d: setting %s %p!\n",
+				        drive, dtp->name, dtp);
+				UDT = dtp;
+				floppy_sizes[drive] = UDT->blocks >> 1;
+
+				if (cmd == FDDEFPRM) {
+				  /* save settings as permanent default type */
+				  default_params[drive].name    = dtp->name;
+				  default_params[drive].spt     = dtp->spt;
+				  default_params[drive].blocks  = dtp->blocks;
+				  default_params[drive].fdc_speed = dtp->fdc_speed;
+				  default_params[drive].stretch = dtp->stretch;
+				}
+				
+				return 0;
+			}
+
+		}
+
+		/* no matching disk type found above - setting user_params */
+
+	       	if (cmd == FDDEFPRM) {
+		  /* set permanent type */
+		  dtp = &default_params[drive];
+		} else
+		  /* set user type (reset by disk change!) */
+		  dtp = &user_params[drive];
+
+		dtp->name   = "user format";
+		dtp->blocks = setprm.size;
+		dtp->spt    = setprm.sect;
+		if (setprm.sect > 14) 
+		  dtp->fdc_speed = 3;
+		else
+		  dtp->fdc_speed = 0;
+		dtp->stretch = setprm.stretch;
+
+		if (UD.flags & FTD_MSG)
+		    printk (KERN_INFO "floppy%d: blk %d spt %d str %d!\n",
+		        drive, dtp->blocks, dtp->spt, dtp->stretch);
+
+		/* sanity check */
+		if (!dtp || setprm.track != dtp->blocks/dtp->spt/2 
+		    || setprm.head != 2) {
+		        printk(KERN_INFO "floppy%d: bogus: siz %d sec %d trk %d !\n",
+			       drive, setprm.size, setprm.sect, setprm.track);
+			redo_fd_request();
+			return -EINVAL;
+		}
+
+		UDT = dtp;
+		floppy_sizes[drive] = UDT->blocks >> 1;
+
+		return 0;
 	case FDMSGON:
 		UD.flags |= FTD_MSG;
 		return 0;
@@ -1602,6 +1756,8 @@ static int fd_ioctl(struct inode *inode, struct file *filp,
 		return do_format(device, &fmt_desc);
 	case FDCLRPRM:
 		UDT = NULL;
+		/* MSch: invalidate default_params */
+		default_params[drive].blocks  = 0;
 		floppy_sizes[drive] = MAX_DISK_SIZE;
 		return invalidate_drive (device);
 	case FDFMTEND:
@@ -1761,7 +1917,7 @@ static int floppy_open( struct inode *inode, struct file *filp )
   drive = MINOR (inode->i_rdev) & 3;
   type  = MINOR(inode->i_rdev) >> 2;
   DPRINT(("fd_open: type=%d\n",type));
-  if (type > NUM_DISK_MINORS)
+  if (drive >= FD_MAX_UNITS || type > NUM_DISK_MINORS)
 	return -ENXIO;
 
   old_dev = fd_device[drive];

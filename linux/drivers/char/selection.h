@@ -12,6 +12,11 @@ extern int sel_loadlut(const unsigned long arg);
 extern int mouse_reporting(void);
 extern void mouse_report(struct tty_struct * tty, int butt, int mrx, int mry);
 
+#if defined(__mc68000__)
+extern unsigned long get_video_num_columns(unsigned int console);
+extern unsigned long get_video_num_lines(unsigned int console);
+extern unsigned long get_video_size_row(unsigned int console);
+#endif
 extern unsigned long video_num_columns;
 extern unsigned long video_num_lines;
 extern unsigned long video_size_row;
