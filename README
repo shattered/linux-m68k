@@ -1,1 +1,8 @@
 Linux 2.0.36 kernel sources: pristine, Linux-m68k, Linux-m68k+BESTA patch
+
+Taken from http://ftp.stu.neva.ru/besta/linux-src/
+
+BESTA (BESTA-88) was a Soviet UNIX-based graphic workstation, see:
+
+http://ru.wikipedia.org/wiki/%D0%91%D0%B5%D1%81%D1%82%D0%B0_%28%D0%BA%D0%BE%D0%BC%D0%BF%D1%8C%D1%8E%D1%82%D0%B5%D1%80%29
+http://en.wikipedia.org/wiki/Besta_%28computer%29
